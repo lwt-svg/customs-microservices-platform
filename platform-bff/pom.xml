@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven 是 Java 项目的构建工具。
+  它负责下载依赖、编译代码、运行测试和打包应用，作用类似 Python 项目中的 pip + pytest。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Spring Boot 父工程统一管理常用依赖的兼容版本。 -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <!--
+          本机学习环境固定使用 Nacos Server 2.5.3。
+          Spring Cloud Alibaba 2023.0.1.0 官方适配 Spring Boot 3.2.4，
+          因此本项目在接入 Nacos 前先对齐到该组合，避免跨 Nacos 大版本。
+        -->
+        <version>3.2.4</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.customsaffairs</groupId>
+    <artifactId>platform-bff</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <name>platform-bff</name>
+    <description>Local-only Sand Dune OS platform BFF learning project</description>
+
+    <properties>
+        <!-- 本机已验证 JDK 21；LTS 版本适合学习项目和长期维护。 -->
+        <java.version>21</java.version>
+        <!-- Spring Cloud 与 Spring Cloud Alibaba 必须按兼容矩阵成对升级。 -->
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+        <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 管理 Spring Cloud 组件版本；本小步尚未实际引入任何 Cloud 功能。 -->
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!--
+              管理 Spring Cloud Alibaba 组件版本。
+              Nacos Discovery starter 不需要重复写版本号，而是使用此处锁定的兼容版本。
+            -->
+            <dependency>
+                <groupId>com.alibaba.cloud</groupId>
+                <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+                <version>${spring-cloud-alibaba.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!--
+          Nacos 服务注册与发现能力：
+          让 platform-bff 启动时登记到本机 Nacos；后续也可据此查询 Python 服务地址。
+          版本来自上方 dependencyManagement，避免手工写出不兼容的版本组合。
+        -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+
+        <!-- 提供 REST API、JSON 序列化以及内嵌 Web 服务器。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+          提供 @NotBlank、@Size、@Valid 等请求校验注解。
+          例如创建组织时，空编码和过长名称会在进入业务逻辑前被拒绝。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- 提供 /actuator/health 等适合容器探针使用的健康检查。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
+          Java 平台层访问自己数据库的基础能力。
+          JPA 让 Java 对象可以映射到关系型数据库表；14.1 先安装能力，
+          14.2 才会创建第一个组织实体类。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!--
+          Flyway 负责按版本执行数据库结构变更。
+          它不会猜测或自动修改表结构；每一次改变都写成可审查的 SQL 迁移文件。
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
+        <!-- Java 连接本机 MySQL 时使用的 JDBC 驱动。 -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- 仅测试环境使用，包含 JUnit 5、MockMvc 和 Spring Test。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+          测试专用的内存数据库。mvn test 不应连接开发机 MySQL，
+          测试结束后其中的数据会自动消失。
+        -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- 让 Maven 能打出可直接 java -jar 运行的 Spring Boot 包。 -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

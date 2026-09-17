@@ -1,0 +1,28 @@
+# Local runtime configuration may contain personal API keys and local passwords.
+.env.local
+
+# Python virtual environments, caches and test output.
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Maven 在每次编译后生成 target/；这是可再生构建产物，不应提交到 Git。
+**/target/
+
+# Node.js 安装的依赖与前端构建产物都可以重新生成，不应提交到 Git。
+**/node_modules/
+**/dist/
+
+# Local IDE state and operating-system metadata.
+.DS_Store
+.idea/
+.vscode/
+
+# Runtime files must never be versioned.
+runtime/
+uploads/

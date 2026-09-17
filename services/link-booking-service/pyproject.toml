@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+# 明确告诉 setuptools：只有 app/ 是可导入的业务 Python 包。
+# alembic/ 是迁移脚本目录，不应被当成第二个顶层 Python 包。
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["alembic*", "tests*"]
+
+[project]
+name = "link-booking-service"
+version = "0.1.0"
+description = "Local-only LINK booking learning microservice"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.14,<2.0",
+    "asyncmy>=0.2,<1.0",
+    "fastapi[standard]>=0.115,<1.0",
+    # Nacos 2.5.3 的 HTTP OpenAPI 适配层使用它；这是运行时依赖，不是仅测试依赖。
+    "httpx>=0.27,<1.0",
+    "pydantic-settings>=2.6,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<3.0",
+    "structlog>=24.4,<26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

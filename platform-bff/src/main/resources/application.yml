@@ -1,0 +1,61 @@
+# Spring Boot 的本地学习配置。不要在这里写密码、Token、企业地址或真实数据。
+spring:
+  application:
+    # 服务名将来会用于日志、Nacos 注册和调用链追踪。
+    name: platform-bff
+
+  datasource:
+    #
+    # Java BFF 只连接自己的 platform_bff_lab schema。
+    # 冒号后的内容是无密码的本机默认地址；用户名和密码仍只从环境变量取得。
+    # 不能改成 LINK 服务的数据库地址，更不能填企业数据库地址。
+    url: ${PLATFORM_DATABASE_URL:jdbc:mysql://127.0.0.1:3306/platform_bff_lab?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${PLATFORM_DATABASE_USERNAME:${MYSQL_USER:lab_user}}
+    password: ${PLATFORM_DATABASE_PASSWORD:${MYSQL_PASSWORD:}}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      # 禁止 Hibernate 自己猜测并修改表；表结构只能由下方 Flyway 迁移文件管理。
+      ddl-auto: validate
+    # Controller 不应在返回 JSON 时临时访问数据库，避免初学阶段隐藏数据库查询。
+    open-in-view: false
+
+  flyway:
+    # Flyway 启动时寻找 src/main/resources/db/migration 下的版本化 SQL 文件。
+    locations: classpath:db/migration
+    # Flyway 自己会创建一张历史记录表，记录哪些迁移已成功执行。
+    default-schema: ${PLATFORM_DATABASE_SCHEMA:platform_bff_lab}
+    schemas: ${PLATFORM_DATABASE_SCHEMA:platform_bff_lab}
+    create-schemas: false
+
+  cloud:
+    nacos:
+      #
+      # Nacos 认证信息只能从操作系统环境变量读取，不能写入 Git 或本文件。
+      # 冒号后的空值表示：本机没有传入变量时，默认使用空字符串。
+      # Spring Boot 不会自动读取项目根目录的 .env.local，启动方式会在笔记中单独说明。
+      username: ${NACOS_USERNAME:}
+      password: ${NACOS_PASSWORD:}
+
+      discovery:
+        # 此处要求“主机:端口”，不是给浏览器使用的 http:// URL。
+        # 未提供环境变量时，仅使用安全的本机默认地址。
+        server-addr: ${NACOS_DISCOVERY_SERVER_ADDR:127.0.0.1:8848}
+        # 仅供个人学习环境的服务分组，不能填写企业 Nacos 分组。
+        group: CUSTOMS_AFFAIRS_LOCAL
+
+server:
+  # 与未来 Python 服务默认端口 8000 分开，避免本机启动时冲突。
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 第一阶段仅开放健康检查；其他 Actuator 端点暂不暴露给网络。
+        include: health
+  endpoint:
+    health:
+      # Docker 或本机探针可获得明确 UP/DOWN 状态，业务细节仍不会对外泄露。
+      show-details: never

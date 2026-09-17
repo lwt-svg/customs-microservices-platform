@@ -1,0 +1,25 @@
+# 仅供 mvn test 使用的 Spring Boot 配置。
+# @ActiveProfiles("test") 会让测试应用此文件，而不是尝试真的登记到本机 Nacos。
+spring:
+  datasource:
+    # 测试使用进程内的临时 H2 数据库，绝不连接 127.0.0.1:3306 的本机 MySQL。
+    url: jdbc:h2:mem:platform_bff_test;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    # 覆盖正式环境的 MySQL 驱动，使上方 H2 地址能够被正确识别。
+    driver-class-name: org.h2.Driver
+
+  flyway:
+    # 14.1 的 Web 接口测试不验证迁移 SQL；迁移将在独立的 MySQL 验证步骤中测试。
+    enabled: false
+
+  jpa:
+    hibernate:
+      # 测试环境没有执行 Flyway，因此由 Hibernate 临时创建实体对应的表；测试结束后自动删除。
+      ddl-auto: create-drop
+
+  cloud:
+    nacos:
+      discovery:
+        # 测试验证 HTTP JSON，不验证本机 Docker 是否正在运行；因此显式关闭服务注册。
+        enabled: false
