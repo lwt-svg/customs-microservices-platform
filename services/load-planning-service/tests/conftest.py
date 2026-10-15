@@ -24,7 +24,7 @@ os.environ["LOAD_PLANNING_NACOS_DISCOVERY_ENABLED"] = "false"
 os.environ["LOAD_PLANNING_LANGGRAPH_ENABLED"] = "true"
 
 from app.db.base import Base
-from app.db.session import get_session
+from app.db.session import get_session, get_session_factory
 from app.main import app
 
 
@@ -46,7 +46,13 @@ async def client() -> AsyncIterator[AsyncClient]:
         async with session_factory() as session:
             yield session
 
+    def override_get_session_factory() -> async_sessionmaker[AsyncSession]:
+        """让 Shipment Case 的多阶段事务也使用本测试的内存 SQLite。"""
+
+        return session_factory
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_session_factory] = override_get_session_factory
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),

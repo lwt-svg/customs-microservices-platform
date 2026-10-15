@@ -53,6 +53,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/tradeops/shipment-cases',
+    name: 'shipment-cases',
+    component: () => import('@/views/ShipmentCasesView.vue'),
+    meta: {
+      title: '发运案件中心',
+      description: '统一管理发运案件、专业资源、状态流转与审计事件',
+    },
+  },
+  {
     path: '/link-booking/applications',
     name: 'link-booking-applications',
     component: () => import('@/views/LinkBookingView.vue'),

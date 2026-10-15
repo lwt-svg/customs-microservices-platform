@@ -99,13 +99,23 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-start_arguments=()
 case "${insight_mode}" in
-  rules) start_arguments+=(--with-rules) ;;
-  codex) start_arguments+=(--with-codex) ;;
-  openai) start_arguments+=(--with-openai) ;;
+  configured)
+    # macOS still ships Bash 3.2. Under `set -u`, expanding an initialized but
+    # empty array can still fail with "unbound variable", so the no-option path
+    # must call start-core/start-full without an empty "${array[@]}" expansion.
+    "${SCRIPT_DIR}/start-${mode}.sh"
+    ;;
+  rules)
+    "${SCRIPT_DIR}/start-${mode}.sh" --with-rules
+    ;;
+  codex)
+    "${SCRIPT_DIR}/start-${mode}.sh" --with-codex
+    ;;
+  openai)
+    "${SCRIPT_DIR}/start-${mode}.sh" --with-openai
+    ;;
 esac
-"${SCRIPT_DIR}/start-${mode}.sh" "${start_arguments[@]}"
 
 if [[ -s "${session_manifest}" ]]; then
   info "前台监督已接管本次新建的应用进程。按 Ctrl+C 安全结束。"
@@ -132,14 +142,14 @@ while true; do
   # Three consecutive failures avoid tearing down the session for one brief
   # Nacos heartbeat or database connection fluctuation.
   if (( monitor_tick % 5 == 0 )); then
-    if "${PYTHON_BIN}" "${SCRIPT_DIR}/load-planning-e2e.py" \
+    if "${PYTHON_BIN}" "${SCRIPT_DIR}/shipment-case-e2e.py" \
       --probe-only --wait-seconds 0 --quiet; then
       chain_failure_count=0
     else
       ((chain_failure_count += 1))
-      warn "智能装载真实调用链暂时不可用（连续 ${chain_failure_count}/3 次）。"
+      warn "核心业务真实调用链暂时不可用（连续 ${chain_failure_count}/3 次）。"
       if (( chain_failure_count >= 3 )); then
-        warn "Java BFF → Nacos → Python → MySQL 连续失败，结束本次监督。"
+        warn "Java BFF → Nacos → LINK / Agent Runtime → MySQL 连续失败，结束本次监督。"
         exit 1
       fi
     fi

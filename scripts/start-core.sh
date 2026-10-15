@@ -60,7 +60,7 @@ start_link_service
 record_link_mode core
 start_load_planning_service
 start_java_bff
-verify_load_planning_bff_chain
+verify_core_bff_chains
 start_platform_web
 
 printf '\n'

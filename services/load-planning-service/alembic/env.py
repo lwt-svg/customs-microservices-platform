@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import settings
 from app.db.base import Base
-from app.models import agent_run, load_planning, plan_version  # noqa: F401 让模型注册到元数据
+from app.models import (  # noqa: F401 让模型注册到元数据
+    agent_run,
+    load_planning,
+    plan_version,
+    shipment_case,
+)
 
 config = context.config
 # alembic.ini 中只放占位地址；真实连接串由配置层提供。

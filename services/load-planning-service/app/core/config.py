@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     load_planning_database_url: str = (
         "mysql+asyncmy://lab_user:local-only@127.0.0.1:3306/load_planning_service"
     )
+    # Shipment Case 直接验证 LINK 资源，不能绕回 Java BFF 后再调用 Python。
+    # 本机进程使用 127.0.0.1；Docker/K8s 只需替换这个地址，领域 Service 不感知
+    # Nacos、容器 DNS 或 Service DNS 的具体实现。
+    link_booking_internal_base_url: str = "http://127.0.0.1:8000"
+    # 外部资源验证发生在数据库写事务之外，但仍必须设置短超时，避免一个请求无限等待。
+    shipment_resource_verify_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     # 预览接口只在内存中读取这段上限内的字节，不把原 PDF 保存到 runtime 或数据库。
     packing_list_preview_max_bytes: int = 5 * 1024 * 1024
 

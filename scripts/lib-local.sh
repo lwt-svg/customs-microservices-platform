@@ -1155,6 +1155,16 @@ verify_load_planning_bff_chain() {
     || die "智能装载真实调用链未就绪。请查看日志：${log_path}"
 }
 
+verify_core_bff_chains() {
+  local probe_script="${SCRIPT_DIR}/shipment-case-e2e.py"
+  local log_path="${LOG_DIR}/platform-bff.log"
+
+  [[ -f "${probe_script}" ]] || die "缺少核心业务链路探活脚本：${probe_script}"
+  info "验证 Java BFF → Nacos → LINK / Agent Runtime → MySQL 核心调用链。"
+  "${PYTHON_BIN}" "${probe_script}" --probe-only --wait-seconds 90 \
+    || die "核心业务调用链未就绪。请查看日志：${log_path}"
+}
+
 start_platform_web() {
   local frontend_directory="${REPO_ROOT}/platform-web"
   local log_path="${LOG_DIR}/platform-web.log"

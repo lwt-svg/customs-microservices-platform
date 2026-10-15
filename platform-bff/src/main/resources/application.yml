@@ -65,3 +65,11 @@ management:
     health:
       # Docker 或本机探针可获得明确 UP/DOWN 状态，业务细节仍不会对外泄露。
       show-details: never
+
+platform:
+  shipment-case:
+    client:
+      # 只控制 Java BFF -> Python Agent Runtime 的 Shipment Case 调用。
+      # 支持 500ms、2s、1m 等 Spring Duration 格式；不会影响其他 RestClient。
+      connect-timeout: ${SHIPMENT_CASE_CONNECT_TIMEOUT:2s}
+      read-timeout: ${SHIPMENT_CASE_READ_TIMEOUT:15s}

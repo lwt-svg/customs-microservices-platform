@@ -64,6 +64,17 @@ const fallbackGroups = [
     ],
   },
   {
+    title: 'TradeOps',
+    items: [
+      {
+        label: '发运案件中心',
+        path: '/tradeops/shipment-cases',
+        icon: 'truck' as IconName,
+        enabled: true,
+      },
+    ],
+  },
+  {
     title: '关务 OS',
     items: [
       {

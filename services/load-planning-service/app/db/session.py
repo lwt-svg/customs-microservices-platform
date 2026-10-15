@@ -18,6 +18,20 @@ engine = create_async_engine(
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """返回当前进程使用的异步会话工厂。
+
+    普通 CRUD 接口只需要一个请求级 ``AsyncSession``，因此继续使用 ``get_session``。
+    Shipment Case 绑定外部资源时需要明确分成“短锁行事务、无事务 HTTP、
+    短写入事务”三段。第一段除了检查案件、命令和绑定，也可能原子登记成功
+    ``NO_OP``；Service 必须能够按阶段创建和关闭会话，所以单独注入工厂。
+
+    测试会覆盖这个依赖，让三段流程仍然使用同一套内存 SQLite，而不是误连本机 MySQL。
+    """
+
+    return SessionLocal
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """为每个 HTTP 请求提供独立异步会话。
 

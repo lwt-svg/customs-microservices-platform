@@ -161,27 +161,30 @@ Python logging 或日志平台提供的按大小/按日期滚动策略，而不�
 
 ## “启动完成”现在检查什么
 
-只检查 8080、8200 是否监听，并不能证明业务链路可用。`start-core.sh`、`start-full.sh` 和
-`run-local.sh` 在输出“已就绪”之前都会请求：
+只检查 8000、8080、8200 是否监听，并不能证明业务链路可用。`start-core.sh`、
+`start-full.sh` 和 `run-local.sh` 在输出“已就绪”之前都会通过 Java BFF 请求：
 
 ```text
-GET http://127.0.0.1:8080/api/v1/platform/load-planning/tasks
+GET /api/v1/platform/load-planning/tasks
+GET /api/v1/platform/link-booking/applications
+GET /api/v1/platform/shipment-cases
 ```
 
-这一个请求实际经过：
+这三次只读探测实际覆盖：
 
 ```text
 Java BFF :8080
-→ 从 Nacos 查找 load-planning-service
-→ Python :8200 查询装载任务
-→ MySQL 返回任务摘要
+→ 从 Nacos 查找 LINK 与 Agent Runtime
+→ Python :8000 / :8200 查询业务列表
+→ 两个独立 MySQL schema 返回数据
 → Python → Java BFF 返回统一 JSON
 ```
 
-因此它比 `/actuator/health` 或端口检查更接近用户真正会使用的链路。只想单独检查这条链路：
+因此它比 `/actuator/health` 或端口检查更接近用户真正会使用的核心链路。只想执行相同
+的只读检查：
 
 ```bash
-python3 scripts/load-planning-e2e.py --probe-only --wait-seconds 30
+python3 scripts/shipment-case-e2e.py --probe-only --wait-seconds 30
 ```
 
 ## 智能装载真实 E2E
@@ -229,6 +232,47 @@ python3 scripts/load-planning-e2e.py
 状态，不会盲目重复写入。输出只包含构造任务编号、步骤和状态，不打印 `.env.local`、
 请求体或响应体。构造任务会保留在本地数据库中，便于之后从 5173 页面复盘。
 
+## Shipment Case 真实 E2E
+
+`core` 服务启动后，可执行：
+
+```bash
+python3 scripts/shipment-case-e2e.py
+```
+
+脚本只访问 `http://127.0.0.1:8080/api/v1/platform/*`，不会绕过 Java BFF 直连
+Python、Nacos 或 MySQL。每次运行使用新的合成编号，依次验证：
+
+```text
+创建装载任务与 LINK 草稿
+→ 创建 Shipment Case
+→ 使用相同 Idempotency-Key 重放创建，确认 id/revision 不变
+→ 绑定装载任务与 LINK 申请
+→ 使用旧 revision 得到 409，且案件与事件没有变化
+→ DRAFT → ACTIVE
+→ 使用相同 Idempotency-Key 重放 ACTIVE，确认没有重复推进
+→ ACTIVE → COMPLETED
+→ GET 复核两个绑定、绑定时状态快照、连续 revision 和无重复事件 sequence
+```
+
+装载任务和 LINK 草稿创建接口当前没有请求级幂等键。如果这两个前置 POST 的网络响应未知，
+脚本只会按本次唯一业务编号执行 GET 恢复，不会盲目重复创建。Shipment Case 的写接口具有
+幂等键；其网络响应未知时，脚本会复用该命令原来的 `Idempotency-Key` 重试，不会生成新
+key。输出不会打印请求体、响应全文或 `.env.local`。合成资源会保留在本地数据库中，便于
+从发运案件中心查看最终时间线。
+
+只验证脚本自己的两类安全策略、不访问网络：
+
+```bash
+python3 scripts/shipment-case-e2e.py --self-test
+```
+
+只读取三条平台链路确认服务就绪、不创建测试数据：
+
+```bash
+python3 scripts/shipment-case-e2e.py --probe-only --wait-seconds 30
+```
+
 ## 脚本自身检查
 
 不启动服务也可以先检查脚本：
@@ -237,8 +281,8 @@ python3 scripts/load-planning-e2e.py
 ./scripts/check-local-scripts.sh
 ```
 
-它会执行 Bash 语法检查、Python 编译检查、离线幂等重试自检、日志轮转自检、三种智能解读
-模式/API Key 隔离自检和帮助入口检查。
+它会执行 Bash 语法检查、Python 编译检查、两个 E2E 的离线安全重试自检、日志轮转自检、
+三种智能解读模式/API Key 隔离自检和帮助入口检查。
 日志自检覆盖归档内容、最旧删除与最新保留、空日志也按降低后的上限收敛、无关文件不删除、
 非法保留数回退、current/archive 符号链接与路径逃逸拒绝、复用现有进程不轮转，以及两个
 并发启动流程必须串行。本机安装了 ShellCheck 时还会自动执行 ShellCheck。

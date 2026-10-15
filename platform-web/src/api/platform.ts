@@ -247,6 +247,96 @@ export interface PlatformMenu {
   children: PlatformMenu[]
 }
 
+/** 发运案件的总生命周期；子任务的等待、失败等状态仍由各专业模块拥有。 */
+export type ShipmentCaseStatus = 'DRAFT' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED'
+
+/** 第一阶段支持的运输或能力使用场景。 */
+export type ShipmentTransportScenario =
+  | 'UNDECIDED'
+  | 'SEA_FCL'
+  | 'SEA_LCL'
+  | 'AIR'
+  | 'EXPRESS'
+  | 'LOAD_PLANNING_ONLY'
+  | 'BOOKING_ONLY'
+
+/** Shipment Case 当前能够绑定的稳定业务资源类型。 */
+export type ShipmentResourceType =
+  | 'LOAD_PLANNING_TASK'
+  | 'LINK_BOOKING_APPLICATION'
+
+/**
+ * 资源绑定时保存的验证快照。
+ *
+ * resourceStatusAtVerification 不是源系统实时状态，页面必须明确显示为“绑定时快照”。
+ */
+export interface ShipmentCaseResourceBinding {
+  id: number
+  resourceType: ShipmentResourceType
+  resourceNumber: string
+  resourceStatusAtVerification: string
+  verificationSource: string
+  verifiedAt: string
+  boundAt: string
+}
+
+/** 案件内只追加、不覆盖的一条审计事件。 */
+export interface ShipmentCaseEvent {
+  id: number
+  sequence: number
+  eventType: string
+  previousStatus: ShipmentCaseStatus | null
+  currentStatus: ShipmentCaseStatus | null
+  resourceType: ShipmentResourceType | null
+  resourceNumber: string | null
+  actorSubject: string
+  actorDisplayName: string
+  actorSource: string
+  requestId: string
+  detail: string
+  occurredAt: string
+}
+
+/** Java BFF 返回给 Vue 的完整案件快照。 */
+export interface ShipmentCase {
+  id: string
+  caseNumber: string
+  caseName: string
+  responsibleOrganizationCode: string
+  transportScenario: ShipmentTransportScenario
+  status: ShipmentCaseStatus
+  revision: number
+  description: string | null
+  createdAt: string
+  updatedAt: string
+  resourceBindings: ShipmentCaseResourceBinding[]
+  events: ShipmentCaseEvent[]
+}
+
+/**
+ * 创建请求不包含组织或操作人。
+ *
+ * 当前 Python 会写入 DEMO_ORG / SYSTEM_DEMO 占位值；真实认证上下文尚未接入。
+ */
+export interface CreateShipmentCaseInput {
+  caseNumber: string
+  caseName: string
+  transportScenario: ShipmentTransportScenario
+  description: string | null
+}
+
+export interface BindShipmentCaseResourceInput {
+  resourceType: ShipmentResourceType
+  resourceNumber: string
+  expectedRevision: number
+}
+
+export interface ChangeShipmentCaseStatusInput {
+  targetStatus: ShipmentCaseStatus
+  expectedRevision: number
+  reason: string
+}
+
 /** 装载主数据的来源类型；SYNTHETIC_DEMO 只用于脱敏学习数据。 */
 export type LoadPlanningSourceType =
   | 'SYNTHETIC_DEMO'
@@ -617,6 +707,22 @@ export interface LockLoadPlanVersionInput {
 }
 
 /**
+ * 带 HTTP 状态码的平台请求错误。
+ *
+ * 它仍然继承 Error，所以旧页面现有的错误处理不受影响；Shipment Case 页面则可以用
+ * status === 409 识别乐观并发或状态冲突，并先刷新权威详情而不是盲目重试。
+ */
+export class PlatformApiError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'PlatformApiError'
+    this.status = status
+  }
+}
+
+/**
  * 访问 Java BFF 并拆开统一响应外壳。
  *
  * 浏览器只请求相对路径 /api，开发环境由 Vite 代理到 127.0.0.1:8080。
@@ -683,7 +789,7 @@ async function requestWithOptions<T>(
       // 某些错误响应可能没有 JSON 正文，此时保留 HTTP 状态提示。
     }
 
-    throw new Error(errorMessage)
+    throw new PlatformApiError(response.status, errorMessage)
   }
 
   const result = (await response.json()) as ApiResponse<T>
@@ -845,6 +951,112 @@ export function retryLinkCarrierSubmission(
       409: '当前投递状态不允许重试，请刷新详情。',
       502: 'Java BFF 暂时无法调用 Python LINK 重试投递。',
       503: 'Nacos 中没有可用的 Python LINK 实例。',
+    },
+  )
+}
+
+/** 查询案件中心列表；首个版本由 BFF 返回包含绑定和事件的完整案件快照。 */
+export function getShipmentCases(): Promise<ShipmentCase[]> {
+  return requestWithOptions<ShipmentCase[]>(
+    '/api/v1/platform/shipment-cases',
+    undefined,
+    {
+      502: 'Java BFF 暂时无法读取 Python 发运案件。',
+      503: 'Nacos 中没有可用的 Agent Runtime 实例。',
+    },
+  )
+}
+
+/** 打开详情时重新读取权威快照，避免用列表旧 revision 执行写命令。 */
+export function getShipmentCase(caseNumber: string): Promise<ShipmentCase> {
+  return requestWithOptions<ShipmentCase>(
+    `/api/v1/platform/shipment-cases/${encodeURIComponent(caseNumber)}`,
+    undefined,
+    {
+      400: '发运案件编号不正确。',
+      404: '该发运案件不存在或已被移除，请刷新列表。',
+      502: 'Java BFF 暂时无法读取 Python 发运案件详情。',
+      503: 'Nacos 中没有可用的 Agent Runtime 实例。',
+    },
+  )
+}
+
+/**
+ * 创建一份 DRAFT 案件。
+ *
+ * 调用方负责保存 idempotencyKey；网络结果不明确时，原表单重试必须复用同一个 key。
+ */
+export function createShipmentCase(
+  input: CreateShipmentCaseInput,
+  idempotencyKey: string,
+): Promise<ShipmentCase> {
+  return requestWithOptions<ShipmentCase>(
+    '/api/v1/platform/shipment-cases',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+    {
+      400: '请检查案件编号、名称和运输场景。',
+      409: '案件编号已存在，或当前幂等键已用于另一份创建命令。',
+      502: 'Java BFF 暂时无法调用 Python 创建发运案件。',
+      503: '发运案件依赖服务暂时不可用。',
+    },
+  )
+}
+
+/** 验证并绑定一个已有装载任务或 LINK 申请。 */
+export function bindShipmentCaseResource(
+  caseNumber: string,
+  input: BindShipmentCaseResourceInput,
+  idempotencyKey: string,
+): Promise<ShipmentCase> {
+  return requestWithOptions<ShipmentCase>(
+    `/api/v1/platform/shipment-cases/${encodeURIComponent(caseNumber)}/resources`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+    {
+      400: '资源可能不存在，或资源类型、编号、案件 revision 不符合要求。',
+      404: '发运案件或待绑定资源不存在。',
+      409: '案件已发生变化、资源已属于其他案件，或当前状态不允许绑定。',
+      502: 'Java BFF 暂时无法验证或绑定业务资源。',
+      503: '发运案件或资源验证服务暂时不可用。',
+    },
+  )
+}
+
+/** 按 Python 状态机推进案件，并把业务原因写入审计时间线。 */
+export function changeShipmentCaseStatus(
+  caseNumber: string,
+  input: ChangeShipmentCaseStatusInput,
+  idempotencyKey: string,
+): Promise<ShipmentCase> {
+  return requestWithOptions<ShipmentCase>(
+    `/api/v1/platform/shipment-cases/${encodeURIComponent(caseNumber)}/status`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+    {
+      400: '请检查目标状态、变更原因和案件 revision。',
+      404: '发运案件不存在，请刷新列表。',
+      409: '案件已发生变化，或当前状态不允许执行该操作。',
+      502: 'Java BFF 暂时无法推进 Python 发运案件。',
+      503: '发运案件依赖服务暂时不可用。',
     },
   )
 }
