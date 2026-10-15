@@ -4,6 +4,12 @@ spring:
     # 服务名将来会用于日志、Nacos 注册和调用链追踪。
     name: platform-bff
 
+  servlet:
+    multipart:
+      # 单个文件仍限制为 5MB；总请求额外预留 multipart boundary 和请求头开销。
+      max-file-size: 5MB
+      max-request-size: 6MB
+
   datasource:
     #
     # Java BFF 只连接自己的 platform_bff_lab schema。

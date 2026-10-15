@@ -1,0 +1,105 @@
+{
+  "dataset": {
+    "dataset_id": "SYNTHETIC-CARGO-MASTER-001",
+    "title": "Chapter 23 synthetic cargo master",
+    "data_classification": "SYNTHETIC_DEMO",
+    "contains_enterprise_data": false,
+    "allowed_usage": [
+      "LEARNING",
+      "UI_DEMO",
+      "AUTOMATED_TEST"
+    ],
+    "prohibited_usage": [
+      "REAL_LOADING",
+      "SAFETY_CERTIFICATION",
+      "PRODUCTION_MASTER_DATA"
+    ],
+    "unit_system": {
+      "length": "mm",
+      "weight": "kg"
+    },
+    "source": {
+      "source_type": "SYNTHETIC_DEMO",
+      "source_ref": "MANUALLY_CONSTRUCTED_FOR_CHAPTER_23",
+      "contains_enterprise_data": false
+    }
+  },
+  "records": [
+    {
+      "sku_code": "DEMO-SKU-A",
+      "description": "Synthetic demo boxed product A",
+      "packaging_version": "DEMO-V1",
+      "data_classification": "SYNTHETIC_DEMO",
+      "dimensions": {
+        "length_mm": 430,
+        "width_mm": 270,
+        "height_mm": 185,
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "weight": {
+        "net_weight_kg": 7.2,
+        "gross_weight_kg": 8.6,
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "units_per_carton": 24,
+      "rotation_policy": {
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "keep_upright": true,
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "stacking": {
+        "stackable": true,
+        "max_stack_layers": 5,
+        "constraint_status": "SYNTHETIC_DEMO_ONLY",
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "master_data_status": "SYNTHETIC_DEMO",
+      "source": {
+        "source_type": "SYNTHETIC_DEMO",
+        "source_ref": "MANUALLY_CONSTRUCTED_FOR_CHAPTER_23",
+        "contains_enterprise_data": false
+      }
+    },
+    {
+      "sku_code": "DEMO-SKU-B",
+      "description": "Synthetic demo boxed product B with unknown production stacking limit",
+      "packaging_version": "DEMO-V1",
+      "data_classification": "SYNTHETIC_DEMO",
+      "dimensions": {
+        "length_mm": 315,
+        "width_mm": 245,
+        "height_mm": 210,
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "weight": {
+        "net_weight_kg": 4.8,
+        "gross_weight_kg": 5.5,
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "units_per_carton": 12,
+      "rotation_policy": {
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "keep_upright": true,
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "stacking": {
+        "stackable": null,
+        "max_stack_layers": null,
+        "constraint_status": "MISSING_REQUIRES_CONFIRMATION",
+        "value_origin": "SYNTHETIC_DEMO"
+      },
+      "master_data_status": "SYNTHETIC_DEMO",
+      "source": {
+        "source_type": "SYNTHETIC_DEMO",
+        "source_ref": "MANUALLY_CONSTRUCTED_FOR_CHAPTER_23",
+        "contains_enterprise_data": false
+      }
+    }
+  ]
+}

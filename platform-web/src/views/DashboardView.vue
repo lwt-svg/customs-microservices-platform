@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   getLinkBookingHealth,
@@ -13,9 +14,7 @@ import {
 } from '@/api/platform'
 import UiIcon from '@/components/UiIcon.vue'
 
-const emit = defineEmits<{
-  openOrganizations: []
-}>()
+const router = useRouter()
 
 const loading = ref(true)
 const errorMessage = ref('')
@@ -175,14 +174,19 @@ onMounted(loadDashboard)
         </div>
 
         <div class="quick-actions">
-          <button type="button" @click="emit('openOrganizations')">
+          <button type="button" @click="router.push('/organizations')">
             <span class="quick-icon blue"><UiIcon name="organization" /></span>
             <span><strong>组织管理</strong><small>查看和创建组织</small></span>
             <UiIcon name="arrow" />
           </button>
-          <button type="button" disabled>
+          <button type="button" @click="router.push('/users')">
             <span class="quick-icon violet"><UiIcon name="users" /></span>
-            <span><strong>用户管理</strong><small>功能开发中</small></span>
+            <span><strong>用户管理</strong><small>查看和创建用户</small></span>
+            <UiIcon name="arrow" />
+          </button>
+          <button type="button" @click="router.push('/link-booking/applications')">
+            <span class="quick-icon green"><UiIcon name="database" /></span>
+            <span><strong>LINK 订舱</strong><small>查看 Python 订舱申请</small></span>
             <UiIcon name="arrow" />
           </button>
         </div>
@@ -196,7 +200,7 @@ onMounted(loadDashboard)
             <h2>最近组织</h2>
             <p>最新创建的平台组织</p>
           </div>
-          <button class="text-button" type="button" @click="emit('openOrganizations')">
+          <button class="text-button" type="button" @click="router.push('/organizations')">
             查看全部
           </button>
         </div>

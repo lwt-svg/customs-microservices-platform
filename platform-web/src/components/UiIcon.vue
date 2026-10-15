@@ -14,6 +14,13 @@ defineProps<{
     | 'arrow'
     | 'close'
     | 'check'
+    | 'upload'
+    | 'file'
+    | 'clock'
+    | 'alert'
+    | 'layers'
+    | 'box'
+    | 'truck'
 }>()
 </script>
 
@@ -77,6 +84,33 @@ defineProps<{
     </template>
     <template v-else-if="name === 'check'">
       <path d="m5 12 4 4L19 6" />
+    </template>
+    <template v-else-if="name === 'upload'">
+      <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
+    </template>
+    <template v-else-if="name === 'file'">
+      <path d="M6 2h8l4 4v16H6zM14 2v5h5M9 13h6M9 17h6" />
+    </template>
+    <template v-else-if="name === 'clock'">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </template>
+    <template v-else-if="name === 'alert'">
+      <path d="M12 3 2.5 20h19zM12 9v4M12 17h.01" />
+    </template>
+    <template v-else-if="name === 'layers'">
+      <path d="m12 2 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 12 9 5 9-5M3 17l9 5 9-5" />
+    </template>
+    <template v-else-if="name === 'box'">
+      <path d="m21 8-9 5-9-5 9-5 9 5Z" />
+      <path d="m3 8 9 5 9-5v9l-9 5-9-5V8Z" />
+      <path d="M12 13v9" />
+    </template>
+    <template v-else-if="name === 'truck'">
+      <path d="M3 6h11v11H3zM14 10h4l3 3v4h-7z" />
+      <circle cx="7" cy="18" r="2" />
+      <circle cx="18" cy="18" r="2" />
     </template>
   </svg>
 </template>

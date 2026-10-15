@@ -44,6 +44,42 @@ services:
       timeout: 5s
       retries: 20
 
+  carrier-simulator:
+    build:
+      context: ./services/link-carrier-simulator
+    container_name: customs-affairs-lab-carrier-simulator
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      # 模拟承运人只使用自己的 schema，不能连接 LINK 或 Java 平台 schema。
+      CARRIER_DATABASE_URL: mysql+asyncmy://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/link_carrier_simulator
+      # 容器通过宿主机回调本地运行的 LINK 服务。
+      CARRIER_CALLBACK_URL: http://host.docker.internal:8000/api/v1/carrier-callbacks/link
+      CARRIER_CALLBACK_TOKEN: ${CARRIER_CALLBACK_TOKEN:?copy .env.example to .env.local first}
+      CARRIER_CALLBACK_RETRY_WORKER_ENABLED: "true"
+      CARRIER_CALLBACK_RETRY_POLL_SECONDS: ${CARRIER_CALLBACK_RETRY_POLL_SECONDS:-2}
+      CARRIER_CALLBACK_LEASE_SECONDS: ${CARRIER_CALLBACK_LEASE_SECONDS:-15}
+    extra_hosts:
+      # macOS/Windows 原生支持此名称；该映射同时兼容本地 Linux Docker。
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8100:8100"
+    command:
+      - sh
+      - -c
+      - python -m alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8100
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health/live')"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 volumes:
   mysql_data:
     name: customs-affairs-lab-mysql-data

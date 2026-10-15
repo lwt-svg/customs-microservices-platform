@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import settings
 from app.db.base import Base
-from app.models import booking_application  # noqa: F401 让模型注册到 Base.metadata
+from app.models import (
+    booking_application,  # noqa: F401 让模型注册到 Base.metadata
+    booking_document_import,  # noqa: F401 让模型注册到 Base.metadata
+    carrier_submission,  # noqa: F401 让模型注册到 Base.metadata
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.link_database_url)

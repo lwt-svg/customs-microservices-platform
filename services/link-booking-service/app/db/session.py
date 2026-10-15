@@ -15,7 +15,11 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
-    """为单个 HTTP 请求提供仅属于 LINK 服务的异步数据库会话。"""
+    """为单个 HTTP 请求提供仅属于 LINK 服务的异步数据库会话。
+
+    yield 之前创建会话，路由及其 Service/Repository 在请求期间共用它；请求成功或抛出
+    异常后都会回到 async with，由上下文管理器关闭会话。提交仍由 Repository 显式执行。
+    """
 
     async with SessionLocal() as session:
         yield session

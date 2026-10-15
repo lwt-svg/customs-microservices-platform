@@ -18,8 +18,8 @@ import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
  * application.yml 中的本地配置登记到 Nacos。测试 profile 会显式关闭此功能，
  * 从而避免单元测试依赖 Nacos 是否启动。</p>
  *
- * <p>现在 BFF 只包含健康检查与 Nacos 注册基础。用户、组织、权限和菜单将在后续章节以独立模块加入，
- * 不能为了“先跑起来”而把它们写进启动类。</p>
+ * <p>业务模块通过独立的实体、Service 和 Controller 加入，启动类只负责应用入口和基础设施开关，
+ * 不把用户、组织、权限或菜单业务逻辑写进这里。</p>
  */
 @SpringBootApplication
 @EnableDiscoveryClient

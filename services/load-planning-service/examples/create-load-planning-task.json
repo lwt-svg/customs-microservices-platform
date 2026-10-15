@@ -1,0 +1,54 @@
+{
+  "task_number": "LP-DEMO-0001",
+  "task_name": "演示装托任务",
+  "description": "只使用构造数据验证箱规和托盘主数据 API。",
+  "cargo_items": [
+    {
+      "item_code": "ITEM-001",
+      "sku_code": "DEMO-SKU-A",
+      "cargo_name": "演示产品 A",
+      "quantity": 20,
+      "length_mm": 300,
+      "width_mm": 200,
+      "height_mm": 150,
+      "gross_weight_kg": 4.0,
+      "source_type": "SYNTHETIC_DEMO",
+      "source_reference": "DEMO-PL.pdf",
+      "source_locator": "page=1;region=item-table;row=1",
+      "confidence": 0.93,
+      "verified": false
+    },
+    {
+      "item_code": "ITEM-002",
+      "sku_code": "DEMO-SKU-B",
+      "cargo_name": "演示产品 B",
+      "quantity": 12,
+      "length_mm": 250,
+      "width_mm": 180,
+      "height_mm": 120,
+      "gross_weight_kg": 2.5,
+      "stackable": true,
+      "keep_upright": true,
+      "fragile": false,
+      "source_type": "SYNTHETIC_DEMO",
+      "source_reference": "仓库演示确认记录",
+      "verified": false
+    }
+  ],
+  "pallet_specs": [
+    {
+      "pallet_code": "PALLET-1200X800",
+      "pallet_name": "1200×800 演示托盘",
+      "quantity": 10,
+      "length_mm": 1200,
+      "width_mm": 800,
+      "height_mm": 144,
+      "tare_weight_kg": 23,
+      "source_type": "SYNTHETIC_DEMO",
+      "source_reference": "DEMO-PL.pdf",
+      "source_locator": "page=1;region=pallet-summary",
+      "confidence": 0.88,
+      "verified": false
+    }
+  ]
+}
