@@ -48,7 +48,7 @@ const capabilityOptions: Array<{
   {
     value: 'LOAD_PLANNING',
     label: '智能装载',
-    description: '协调装载 Agent、方案审批和正式版本。',
+    description: '生成装载方案，并完成 3D 复核、审批和正式发布。',
   },
   {
     value: 'LINK_BOOKING',
@@ -214,7 +214,7 @@ function factReason(fact: ShipmentAgentRequestedFact): string {
       candidate.subjectCode === fact.subjectCode &&
       candidate.factType === fact.factType,
   )
-  return issue?.message ?? '该事实会进入可审计的数据就绪快照，Agent 不会自行猜测。'
+  return issue?.message ?? '该事实会进入可审计的资料快照，系统不会自行猜测。'
 }
 
 function factValueType(fact: ShipmentAgentRequestedFact): 'NUMBER' | 'BOOLEAN' | 'TEXT' {
@@ -250,7 +250,7 @@ const primaryAction = computed<ShipmentAgentAction | null>(() => {
 })
 
 const primaryActionLabel = computed(() => {
-  if (primaryAction.value === 'SUPPLY_DATA') return '保存数据并让 Agent 继续'
+  if (primaryAction.value === 'SUPPLY_DATA') return '保存本批数据并继续检查'
   if (primaryAction.value === 'RECHECK') return '重新检查资源绑定'
   const labels: Record<string, string> = {
     SCENARIO_POLICY_CONFIRMATION: '确认本票能力范围',
@@ -419,11 +419,10 @@ function submit(action: ShipmentAgentAction): void {
     <div class="interrupt-heading">
       <span class="interrupt-symbol"><UiIcon name="alert" /></span>
       <div>
-        <span>HUMAN IN THE LOOP</span>
+        <span>当前需要您处理</span>
         <h4>{{ interrupt.title }}</h4>
         <p>{{ interrupt.description }}</p>
       </div>
-      <span class="interrupt-version">RUN R{{ run.runVersion }}</span>
     </div>
 
     <section v-if="isDataReadiness" class="readiness-remediation">
@@ -434,7 +433,7 @@ function submit(action: ShipmentAgentAction): void {
             {{ readinessIssues.length }} 项阻塞正在等待仓库或业务人员处理
           </strong>
           <p>
-            可以只填写本次已经核实的项目并分批提交。保存后总 Agent 会重新检查；
+            可以只填写本次已经核实的项目并分批提交。保存后系统会重新检查；
             仍有缺失或冲突时会继续停在本步骤，不会带着未知数据进入装载与订舱。
           </p>
         </div>
@@ -546,7 +545,7 @@ function submit(action: ShipmentAgentAction): void {
             type="datetime-local"
             :disabled="busy"
           />
-          <small>如填写，必须晚于观察时间；过期后 Agent 会重新要求核实。</small>
+          <small>如填写，必须晚于观察时间；过期后系统会重新要求核实。</small>
         </label>
       </div>
 
@@ -592,7 +591,7 @@ function submit(action: ShipmentAgentAction): void {
           {{ candidate }}
         </option>
       </select>
-      <small>总 Agent 只保存稳定编号，不复制专业系统中的业务明细。</small>
+      <small>系统只保存稳定编号，不复制专业系统中的业务明细。</small>
     </label>
 
     <div
@@ -602,7 +601,7 @@ function submit(action: ShipmentAgentAction): void {
       <UiIcon name="layers" />
       <p>
         当前还没有可选择的{{ resourceTypeLabel }}。请先在专业工作台创建并绑定资源，
-        然后回到这里重新检查；总 Agent 不会替你生成虚假的业务数据。
+        然后回到这里重新检查；系统不会替你生成虚假的业务数据。
       </p>
     </div>
 
@@ -655,7 +654,7 @@ function submit(action: ShipmentAgentAction): void {
 
 .interrupt-heading {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 13px;
   align-items: start;
 }
@@ -697,17 +696,6 @@ function submit(action: ShipmentAgentAction): void {
   color: #756b58;
   font-size: 13px;
   line-height: 1.65;
-}
-
-.interrupt-version {
-  padding: 5px 8px;
-  border: 1px solid #eadab8;
-  border-radius: 999px;
-  color: #8f753f;
-  background: rgba(255, 255, 255, 0.74);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  white-space: nowrap;
 }
 
 .capability-selector {

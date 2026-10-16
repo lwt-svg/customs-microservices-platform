@@ -51,10 +51,10 @@ const router = useRouter()
  */
 const fallbackGroups: NavigationGroup[] = [
   {
-    title: '核心工作台',
+    title: '日常工作',
     items: [
       {
-        label: '运营驾驶舱',
+        label: '我的工作',
         path: '/dashboard',
         icon: 'dashboard',
         enabled: true,
@@ -65,31 +65,19 @@ const fallbackGroups: NavigationGroup[] = [
         icon: 'truck',
         enabled: true,
       },
-      {
-        label: 'Agent 运行中心',
-        path: '/tradeops/agents',
-        icon: 'server',
-        enabled: true,
-      },
     ],
   },
   {
     title: '专业作业',
     items: [
       {
-        label: 'LINK 自动订舱',
+        label: 'LINK 订舱',
         path: '/link-booking/applications',
         icon: 'database',
         enabled: true,
       },
       {
-        label: '智能装载中心',
-        path: '/supply-chain/load-planning',
-        icon: 'layers',
-        enabled: true,
-      },
-      {
-        label: '装载任务',
+        label: '装载作业',
         path: '/supply-chain/load-planning/tasks',
         icon: 'box',
         enabled: true,
@@ -97,7 +85,18 @@ const fallbackGroups: NavigationGroup[] = [
     ],
   },
   {
-    title: '平台治理',
+    title: '运营监控',
+    items: [
+      {
+        label: '自动化运行监控',
+        path: '/tradeops/agents',
+        icon: 'server',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: '平台管理',
     items: [
       {
         label: '组织管理',
@@ -110,12 +109,6 @@ const fallbackGroups: NavigationGroup[] = [
         label: '角色与权限',
         path: '/authorization',
         icon: 'shield',
-        enabled: true,
-      },
-      {
-        label: '能力目录',
-        path: '/workspaces',
-        icon: 'server',
         enabled: true,
       },
     ],
@@ -227,7 +220,7 @@ function navigate(path: string): void {
 <template>
   <div class="admin-shell">
     <aside class="sidebar">
-      <RouterLink class="brand" to="/dashboard" aria-label="返回 TradeOps 运营驾驶舱">
+      <RouterLink class="brand" to="/dashboard" aria-label="返回我的工作">
         <span class="brand-mark"><span></span></span>
         <div>
           <strong>沙丘 TradeOps</strong>

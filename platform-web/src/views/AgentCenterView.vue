@@ -16,11 +16,19 @@ type RunFilter =
   | 'ALL'
   | 'PROCESSING'
   | 'WAITING_HUMAN'
+  | 'WAITING_RESOURCE'
   | 'WAITING_EXTERNAL'
   | 'FAILED'
   | 'COMPLETED'
 
-type FilterIcon = 'layers' | 'refresh' | 'users' | 'clock' | 'alert' | 'check'
+type FilterIcon =
+  | 'layers'
+  | 'refresh'
+  | 'users'
+  | 'box'
+  | 'clock'
+  | 'alert'
+  | 'check'
 
 interface RunFilterOption {
   key: RunFilter
@@ -46,24 +54,24 @@ const pageVisible = ref(true)
 let autoRefreshTimer: number | undefined
 
 const statusLabels: Record<ShipmentAgentRunStatus, string> = {
-  RUNNING: '正在编排',
-  WAITING_HUMAN: '等待人工',
-  WAITING_RESOURCE: '等待专业处理',
-  WAITING_EXTERNAL: '等待外部系统',
+  RUNNING: '自动处理中',
+  WAITING_HUMAN: '等待业务处理',
+  WAITING_RESOURCE: '等待专业作业',
+  WAITING_EXTERNAL: '等待外部回复',
   COMPLETED: '已完成',
   FAILED: '失败',
   CANCELLED: '已停止',
 }
 
 const stageLabels: Record<ShipmentAgentStage, string> = {
-  SYNCING_CASE: '同步案件事实',
-  AWAITING_SCENARIO_POLICY: '确认本票能力范围',
-  ASSESSING_DATA_READINESS: '检查业务数据',
-  AWAITING_DATA_REMEDIATION: '等待补充业务数据',
-  AWAITING_RESOURCE_BINDING: '等待绑定专业资源',
-  AWAITING_RESOURCE_SELECTION: '选择本次业务资源',
+  SYNCING_CASE: '读取案件资料',
+  AWAITING_SCENARIO_POLICY: '确认本票处理范围',
+  ASSESSING_DATA_READINESS: '核验资料与库存',
+  AWAITING_DATA_REMEDIATION: '等待补充资料与库存',
+  AWAITING_RESOURCE_BINDING: '等待关联专业作业',
+  AWAITING_RESOURCE_SELECTION: '确认本次专业作业',
   AWAITING_CASE_ACTIVATION: '等待激活案件',
-  STARTING_LOAD_AGENT: '启动装载子 Agent',
+  STARTING_LOAD_AGENT: '启动智能装载',
   AWAITING_LOAD_CONSTRAINTS: '补充装载约束',
   AWAITING_LOAD_REVIEW: '复核装载方案',
   AWAITING_LOAD_RELEASE: '发布正式装载版本',
@@ -107,7 +115,7 @@ const sortedRuns = computed(() =>
 function matchesRunFilter(run: ShipmentAgentRun, filter: RunFilter): boolean {
   if (filter === 'ALL') return true
   if (filter === 'PROCESSING') {
-    return run.status === 'RUNNING' || run.status === 'WAITING_RESOURCE'
+    return run.status === 'RUNNING'
   }
   return run.status === filter
 }
@@ -147,23 +155,31 @@ const filterOptions = computed<RunFilterOption[]>(() => {
     {
       key: 'PROCESSING',
       label: '处理中',
-      description: '自动编排或专业处理中',
+      description: '系统正在自动执行',
       icon: 'refresh',
       tone: 'processing',
       count: count('PROCESSING'),
     },
     {
       key: 'WAITING_HUMAN',
-      label: '待人工',
-      description: '等待审批、选择或确认',
+      label: '待业务处理',
+      description: '等待补数、审批或确认',
       icon: 'users',
       tone: 'human',
       count: count('WAITING_HUMAN'),
     },
     {
+      key: 'WAITING_RESOURCE',
+      label: '待专业作业',
+      description: '等待装载或订舱处理',
+      icon: 'box',
+      tone: 'resource',
+      count: count('WAITING_RESOURCE'),
+    },
+    {
       key: 'WAITING_EXTERNAL',
-      label: '等外部',
-      description: '等待承运人异步结果',
+      label: '等待外部',
+      description: '等待承运人回复',
       icon: 'clock',
       tone: 'external',
       count: count('WAITING_EXTERNAL'),
@@ -171,7 +187,7 @@ const filterOptions = computed<RunFilterOption[]>(() => {
     {
       key: 'FAILED',
       label: '失败',
-      description: '保留 Trace 供恢复分析',
+      description: '需要排查或恢复',
       icon: 'alert',
       tone: 'failure',
       count: count('FAILED'),
@@ -235,7 +251,7 @@ async function loadRuns(): Promise<void> {
     reconcileSelection(queryRunId())
     lastRefreshedAt.value = new Date()
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '读取 Agent 运行中心失败'
+    loadError.value = error instanceof Error ? error.message : '读取自动化运行记录失败'
   } finally {
     loading.value = false
   }
@@ -367,10 +383,10 @@ onBeforeUnmount(() => {
         <div class="agent-center-breadcrumb">
           <span>TradeOps</span>
           <i></i>
-          <strong>Agent Runtime</strong>
+          <strong>运营监控</strong>
         </div>
-        <h2>Agent 运行中心</h2>
-        <p>集中查看真实运行、人工待办、外部等待、失败恢复与可审计 Trace。</p>
+        <h2>自动化运行监控</h2>
+        <p>供主管、平台运营和审计人员查看自动处理、人工接管、外部等待与失败恢复。</p>
       </div>
       <div class="agent-center-actions">
         <div>
@@ -403,7 +419,7 @@ onBeforeUnmount(() => {
       <button type="button" @click="loadRuns">重新加载</button>
     </div>
 
-    <section class="agent-center-kpis" aria-label="Agent 运行指标">
+    <section class="agent-center-kpis" aria-label="自动化运行指标">
       <button
         v-for="option in filterOptions"
         :key="option.key"
@@ -426,7 +442,7 @@ onBeforeUnmount(() => {
         <input
           v-model="keyword"
           type="search"
-          placeholder="搜索案件名称、案件编号、运行 ID 或节点"
+          placeholder="搜索案件名称、案件编号、运行 ID 或业务阶段"
         />
       </label>
       <span>
@@ -437,15 +453,15 @@ onBeforeUnmount(() => {
     <div v-if="loading && runs.length === 0" class="agent-center-loading">
       <span></span>
       <div>
-        <strong>正在汇总 Agent Runtime</strong>
-        <p>读取运行状态、支线快照和审计事件。</p>
+        <strong>正在汇总自动化运行</strong>
+        <p>读取流程状态、业务环节和处理记录。</p>
       </div>
     </div>
 
     <div v-else-if="runs.length === 0" class="agent-center-empty">
       <UiIcon name="server" />
-      <strong>还没有 Shipment Agent 运行</strong>
-      <p>进入一票发运案件并启动总 Agent 后，这里会出现真实运行和 Trace。</p>
+      <strong>还没有自动化运行记录</strong>
+      <p>从一票发运案件启动智能协同后，这里会保留处理状态和完整记录。</p>
       <RouterLink to="/tradeops/shipment-cases">进入发运案件中心</RouterLink>
     </div>
 
@@ -453,8 +469,8 @@ onBeforeUnmount(() => {
       <section class="run-list-panel">
         <div class="run-list-heading">
           <div>
-            <span>RUNS</span>
-            <h3>运行队列</h3>
+            <span>AUTOMATION RUNS</span>
+            <h3>自动处理记录</h3>
           </div>
           <span>按最近更新时间排序</span>
         </div>
@@ -487,7 +503,7 @@ onBeforeUnmount(() => {
       <section v-if="selectedRun" class="run-inspector">
         <header class="run-inspector-heading">
           <div>
-            <span>RUN INSPECTOR</span>
+            <span>运行详情</span>
             <h3>{{ selectedRun.caseNumber }}</h3>
             <small>{{ selectedRun.caseName }}</small>
           </div>
@@ -503,7 +519,7 @@ onBeforeUnmount(() => {
             <strong>{{ statusLabels[selectedRun.status] }}</strong>
           </div>
           <div>
-            <span>当前节点</span>
+            <span>当前业务阶段</span>
             <strong>{{ stageLabels[selectedRun.currentStage] }}</strong>
           </div>
           <div>
@@ -515,7 +531,7 @@ onBeforeUnmount(() => {
             <strong>{{ caseStatusLabels[selectedRun.caseStatus] }}</strong>
           </div>
           <div>
-            <span>数据准备</span>
+            <span>资料与库存</span>
             <strong>{{ dataReadinessLabel(selectedRun) }}</strong>
           </div>
           <div>
@@ -566,20 +582,20 @@ onBeforeUnmount(() => {
       <summary>
         <span class="inventory-summary-icon"><UiIcon name="server" /></span>
         <div>
-          <strong>Agent 与技能目录</strong>
-          <small>查看总编排、专业 Agent、连接器与后续能力边界</small>
+          <strong>自动化能力目录</strong>
+          <small>查看发运协同、专业作业、连接器与后续能力边界</small>
         </div>
         <em>3 项已接入 · 1 项规划中</em>
         <UiIcon class="inventory-chevron" name="arrow" />
       </summary>
 
-      <section class="agent-inventory" aria-label="Agent 与技能目录">
+      <section class="agent-inventory" aria-label="自动化能力目录">
         <article class="inventory-card primary">
           <span class="inventory-icon"><UiIcon name="server" /></span>
           <div class="inventory-copy">
             <span>ORCHESTRATOR · LANGGRAPH</span>
             <h3>Shipment Operations Agent</h3>
-            <p>一票案件上的总编排者，负责策略、资源选择、支线协调、异步等待和人工结案。</p>
+            <p>围绕一票案件协调资料核验、装载、订舱、外部等待和人工结案。</p>
           </div>
           <div class="inventory-state">
             <i></i>
@@ -687,7 +703,9 @@ onBeforeUnmount(() => {
 .agent-center-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 
@@ -1043,6 +1061,11 @@ onBeforeUnmount(() => {
 .agent-center-kpis button > span.human {
   color: #876923;
   background: #f6ecd2;
+}
+
+.agent-center-kpis button > span.resource {
+  color: #6f5b8d;
+  background: #eee9f6;
 }
 
 .agent-center-kpis button > span.external {
@@ -1628,11 +1651,21 @@ onBeforeUnmount(() => {
   }
 
   .agent-center-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: center;
+    justify-content: start;
   }
 
   .agent-center-actions > div {
+    grid-column: 1 / -1;
     text-align: left;
+  }
+
+  .agent-center-actions button {
+    min-width: 0;
+    justify-content: center;
   }
 
   .agent-inventory,

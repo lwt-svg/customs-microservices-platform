@@ -31,7 +31,7 @@ const emit = defineEmits<{
 interface PipelineStep {
   code: string
   label: string
-  state: 'done' | 'current' | 'pending' | 'stopped'
+  state: 'done' | 'current' | 'pending' | 'stopped' | 'skipped'
 }
 
 const run = ref<ShipmentAgentRun | null>(null)
@@ -50,13 +50,13 @@ const pendingReconcileKeys = new Map<string, string>()
 const pendingResumeKeys = new Map<string, string>()
 
 const statusLabels: Record<ShipmentAgentRunStatus, string> = {
-  RUNNING: '正在编排',
-  WAITING_HUMAN: '等待人工',
-  WAITING_RESOURCE: '等待专业处理',
-  WAITING_EXTERNAL: '等待外部系统',
-  COMPLETED: '运行完成',
-  FAILED: '运行失败',
-  CANCELLED: '已停止',
+  RUNNING: '系统正在处理',
+  WAITING_HUMAN: '等待业务处理',
+  WAITING_RESOURCE: '等待专业作业',
+  WAITING_EXTERNAL: '等待承运人回复',
+  COMPLETED: '流程已完成',
+  FAILED: '处理失败',
+  CANCELLED: '本次处理已停止',
 }
 
 const stageCopy: Record<
@@ -91,7 +91,7 @@ const stageCopy: Record<
   AWAITING_RESOURCE_SELECTION: {
     eyebrow: '等待业务选择',
     title: '同类资源不止一条',
-    description: '总 Agent 已暂停，等待人工选择本次运行真正使用的业务资源。',
+    description: '系统已暂停，请选择本次实际使用的业务作业。',
   },
   AWAITING_CASE_ACTIVATION: {
     eyebrow: '等待业务批准',
@@ -100,12 +100,12 @@ const stageCopy: Record<
   },
   STARTING_LOAD_AGENT: {
     eyebrow: '自动执行',
-    title: '正在启动装载子 Agent',
+    title: '正在启动智能装载',
     description: '使用确定性幂等键启动已绑定任务，不会创建第二条重复运行。',
   },
   AWAITING_LOAD_CONSTRAINTS: {
     eyebrow: '等待装载资料',
-    title: '装载 Agent 等待补充约束',
+    title: '智能装载等待补充约束',
     description: '请在装载工作台填写缺失参数，完成后点击“重新检查”。',
   },
   AWAITING_LOAD_REVIEW: {
@@ -120,8 +120,8 @@ const stageCopy: Record<
   },
   AWAITING_LOAD_REPLAN: {
     eyebrow: '装载异常待处理',
-    title: '装载支线需要重新规划',
-    description: '上一轮已驳回或失败；处理完成后由总 Agent 重新观察。',
+    title: '装载方案需要重新规划',
+    description: '上一轮已驳回或失败；处理完成后系统会重新读取最新状态。',
   },
   AWAITING_BOOKING_SUBMIT_APPROVAL: {
     eyebrow: '等待提交批准',
@@ -150,8 +150,8 @@ const stageCopy: Record<
   },
   AWAITING_COMPLETION_APPROVAL: {
     eyebrow: '等待结案确认',
-    title: '所有必需支线已经就绪',
-    description: '总 Agent 已完成自动检查，等待业务人员确认结案。',
+    title: '本票所需专业作业已经就绪',
+    description: '系统已完成自动检查，等待业务人员确认结案。',
   },
   COMPLETING_CASE: {
     eyebrow: '正在结案',
@@ -159,71 +159,222 @@ const stageCopy: Record<
     description: '使用固定幂等键推进案件终态并写入审计记录。',
   },
   COMPLETED: {
-    eyebrow: 'COMPLETED',
-    title: 'Shipment Agent 闭环已完成',
-    description: '装载、订舱和最终人工确认已在同一案件轨迹中形成记录。',
+    eyebrow: '流程完成',
+    title: '本票发运协同已经完成',
+    description: '本票启用的专业作业和最终人工确认已在同一案件轨迹中形成记录。',
   },
   FAILED: {
-    eyebrow: 'RUN FAILED',
-    title: '总 Agent 运行失败',
+    eyebrow: '处理失败',
+    title: '本次自动处理已经停止',
     description: '运行已停止，失败代码和事件轨迹可用于排查与恢复。',
   },
   CANCELLED: {
-    eyebrow: 'RUN STOPPED',
-    title: '本次总 Agent 已停止',
+    eyebrow: '已停止',
+    title: '本次自动处理已停止',
     description: '历史轨迹仍保留；如业务继续，可按案件当前事实启动新运行。',
   },
 }
 
+const displayRun = computed(() => run.value ?? history.value[0] ?? null)
+
 const currentCopy = computed(() =>
-  run.value
-    ? stageCopy[run.value.currentStage]
+  displayRun.value
+    ? stageCopy[displayRun.value.currentStage]
     : {
-        eyebrow: 'READY',
-        title: '尚未启动 Shipment Agent',
-        description: '启动后将编排已绑定的装载任务与 LINK 申请，并在关键节点等待人工。',
+        eyebrow: '等待开始',
+        title: '尚未开始自动处理',
+        description: '开始后，系统会先核验资料与库存，再按顺序推进装载、订舱和结案。',
       },
 )
 
+const businessStageIndex: Record<ShipmentAgentStage, number> = {
+  SYNCING_CASE: 0,
+  AWAITING_SCENARIO_POLICY: 0,
+  ASSESSING_DATA_READINESS: 0,
+  AWAITING_DATA_REMEDIATION: 0,
+  AWAITING_RESOURCE_BINDING: 0,
+  AWAITING_RESOURCE_SELECTION: 0,
+  AWAITING_CASE_ACTIVATION: 0,
+  STARTING_LOAD_AGENT: 1,
+  AWAITING_LOAD_CONSTRAINTS: 1,
+  AWAITING_LOAD_REVIEW: 1,
+  AWAITING_LOAD_RELEASE: 1,
+  AWAITING_LOAD_REPLAN: 1,
+  AWAITING_BOOKING_SUBMIT_APPROVAL: 2,
+  SUBMITTING_BOOKING: 2,
+  AWAITING_BOOKING_RESULT: 3,
+  AWAITING_BOOKING_RETRY_APPROVAL: 3,
+  // 被拒绝或取消后仍要回到 LINK 申请本身处理，不能误画成“承运人确认”。
+  AWAITING_BOOKING_REPLACEMENT: 2,
+  AWAITING_COMPLETION_APPROVAL: 4,
+  COMPLETING_CASE: 4,
+  COMPLETED: 5,
+  FAILED: 5,
+  CANCELLED: 5,
+}
+
+const businessStageLabels = [
+  '资料与库存核验',
+  '智能装载',
+  'LINK 订舱',
+  '承运人确认',
+  '结案',
+]
+
+function isBusinessStageRequired(
+  runSnapshot: ShipmentAgentRun,
+  index: number,
+): boolean {
+  // 能力策略尚未确认时，空数组表示“还没决定”，不能提前显示成“不适用”。
+  if (!runSnapshot.scenarioPolicyConfirmed) {
+    return true
+  }
+  if (index === 1) {
+    return runSnapshot.requiredCapabilities.includes('LOAD_PLANNING')
+  }
+  if (index === 2 || index === 3) {
+    return runSnapshot.requiredCapabilities.includes('LINK_BOOKING')
+  }
+  return true
+}
+
+const stageOwnerLabels: Record<ShipmentAgentStage, string> = {
+  SYNCING_CASE: '系统自动处理',
+  AWAITING_SCENARIO_POLICY: '发运协调员',
+  ASSESSING_DATA_READINESS: '系统自动处理',
+  AWAITING_DATA_REMEDIATION: '仓库业务员',
+  AWAITING_RESOURCE_BINDING: '发运协调员',
+  AWAITING_RESOURCE_SELECTION: '发运协调员',
+  AWAITING_CASE_ACTIVATION: '发运负责人',
+  STARTING_LOAD_AGENT: '系统自动处理',
+  AWAITING_LOAD_CONSTRAINTS: '装载规划员',
+  AWAITING_LOAD_REVIEW: '装载审核员',
+  AWAITING_LOAD_RELEASE: '仓库作业负责人',
+  AWAITING_LOAD_REPLAN: '装载规划员',
+  AWAITING_BOOKING_SUBMIT_APPROVAL: '订舱业务员',
+  SUBMITTING_BOOKING: '系统自动处理',
+  AWAITING_BOOKING_RESULT: '承运人 / 系统自动跟踪',
+  AWAITING_BOOKING_RETRY_APPROVAL: '订舱业务员',
+  AWAITING_BOOKING_REPLACEMENT: '订舱业务员',
+  AWAITING_COMPLETION_APPROVAL: '发运负责人',
+  COMPLETING_CASE: '系统自动处理',
+  COMPLETED: '无需处理',
+  FAILED: '发运协调员',
+  CANCELLED: '发运协调员',
+}
+
+const stageNextActionLabels: Record<ShipmentAgentStage, string> = {
+  SYNCING_CASE: '等待系统完成同步，无需重复操作',
+  AWAITING_SCENARIO_POLICY: '确认本票是否需要智能装载和 LINK 订舱',
+  ASSESSING_DATA_READINESS: '等待系统完成资料与库存检查',
+  AWAITING_DATA_REMEDIATION: '补充已核实的库存或主数据并提交',
+  AWAITING_RESOURCE_BINDING: '准备专业作业并关联到本票案件',
+  AWAITING_RESOURCE_SELECTION: '选择本次实际使用的专业作业',
+  AWAITING_CASE_ACTIVATION: '核对案件信息并批准进入正式作业',
+  STARTING_LOAD_AGENT: '等待系统生成或恢复装载方案',
+  AWAITING_LOAD_CONSTRAINTS: '在智能装载中补齐箱规或安全约束',
+  AWAITING_LOAD_REVIEW: '打开 3D 装载方案并完成复核',
+  AWAITING_LOAD_RELEASE: '发布现场可以执行的正式装载版本',
+  AWAITING_LOAD_REPLAN: '修正装载问题并重新规划',
+  AWAITING_BOOKING_SUBMIT_APPROVAL: '核对七步填单结果并批准提交',
+  SUBMITTING_BOOKING: '等待系统完成一次安全提交',
+  AWAITING_BOOKING_RESULT: '等待承运人回复；不要重复提交申请',
+  AWAITING_BOOKING_RETRY_APPROVAL: '核对失败原因后决定是否重试',
+  AWAITING_BOOKING_REPLACEMENT: '准备新的 LINK 申请并重新关联',
+  AWAITING_COMPLETION_APPROVAL: '核对装载和订舱结果后确认结案',
+  COMPLETING_CASE: '等待系统写入结案结果',
+  COMPLETED: '查看装载、订舱结果或业务记录',
+  FAILED: '查看失败原因，修复后再发起处理',
+  CANCELLED: '如需继续，基于当前案件重新发起处理',
+}
+
+const businessFocus = computed(() => {
+  const current = displayRun.value
+  if (!current) {
+    return {
+      phase: '资料与库存核验',
+      reason: '本票案件尚未开始自动处理。',
+      owner: '发运协调员',
+      nextAction: '点击“开始自动处理”，系统会先检查资料和库存。',
+      tone: 'ready',
+    }
+  }
+
+  if (current.status === 'COMPLETED') {
+    return {
+      phase: '结案',
+      reason: '本票所需步骤已经完成，没有待处理的阻塞。',
+      owner: '无需处理',
+      nextAction: stageNextActionLabels.COMPLETED,
+      tone: 'success',
+    }
+  }
+
+  const isWaiting =
+    current.pendingInterrupt !== null ||
+    ['WAITING_HUMAN', 'WAITING_RESOURCE', 'WAITING_EXTERNAL'].includes(current.status)
+  const blockingCount =
+    current.dataReadiness?.blockingIssueCount ??
+    current.dataReadiness?.issueCounts?.blocking ??
+    current.dataReadiness?.issues.length ??
+    0
+  const readinessReason =
+    current.currentStage === 'AWAITING_DATA_REMEDIATION' && blockingCount > 0
+      ? `发现 ${blockingCount} 项库存或主数据问题，系统已安全暂停，避免错误进入装载和订舱。`
+      : null
+  const focusStage =
+    current.status === 'FAILED' || current.status === 'CANCELLED'
+      ? [...current.events]
+          .reverse()
+          .map((event) => event.stage)
+          .find((stage) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(stage)) ??
+        current.currentStage
+      : current.currentStage
+  const precisePhase =
+    current.status === 'FAILED'
+      ? `${stageCopy[focusStage].title}（发生异常）`
+      : current.status === 'CANCELLED'
+        ? `${stageCopy[focusStage].title}（已停止）`
+        : stageCopy[current.currentStage].title
+  const failureReason =
+    current.status === 'FAILED'
+      ? current.failureMessage?.trim() || currentCopy.value.description
+      : null
+  const currentReason =
+    readinessReason ??
+    failureReason ??
+    (isWaiting || current.status === 'CANCELLED'
+      ? currentCopy.value.description
+      : '当前没有业务阻塞，系统正在自动处理。')
+
+  return {
+    phase: precisePhase,
+    reason: currentReason,
+    owner: stageOwnerLabels[current.currentStage],
+    nextAction: stageNextActionLabels[current.currentStage],
+    tone:
+      current.status === 'FAILED' || current.status === 'CANCELLED'
+        ? 'danger'
+        : isWaiting
+          ? 'attention'
+          : 'running',
+  }
+})
+
 const pipeline = computed<PipelineStep[]>(() => {
   // 案件没有“活动运行”时，仍用最近一次终态运行还原流程结果。否则一个已经完成的案件
-  // 会错误地重新显示“范围策略进行中”，失败运行也会被误画成六步全部完成。
-  const pipelineRun = run.value ?? history.value[0] ?? null
+  // 会错误地重新显示“资料核验进行中”，失败运行也会被误画成五步全部完成。
+  const pipelineRun = displayRun.value
   if (!pipelineRun) {
     return [
-      { code: '01', label: '范围策略', state: 'current' },
-      { code: '02', label: '数据准备', state: 'pending' },
-      { code: '03', label: '资源与激活', state: 'pending' },
-      { code: '04', label: '智能装载', state: 'pending' },
-      { code: '05', label: 'LINK 订舱', state: 'pending' },
-      { code: '06', label: '人工结案', state: 'pending' },
+      { code: '01', label: '资料与库存核验', state: 'current' },
+      { code: '02', label: '智能装载', state: 'pending' },
+      { code: '03', label: 'LINK 订舱', state: 'pending' },
+      { code: '04', label: '承运人确认', state: 'pending' },
+      { code: '05', label: '结案', state: 'pending' },
     ]
   }
 
-  const stageIndex: Record<ShipmentAgentStage, number> = {
-    SYNCING_CASE: 0,
-    AWAITING_SCENARIO_POLICY: 0,
-    ASSESSING_DATA_READINESS: 1,
-    AWAITING_DATA_REMEDIATION: 1,
-    AWAITING_RESOURCE_BINDING: 2,
-    AWAITING_RESOURCE_SELECTION: 2,
-    AWAITING_CASE_ACTIVATION: 2,
-    STARTING_LOAD_AGENT: 3,
-    AWAITING_LOAD_CONSTRAINTS: 3,
-    AWAITING_LOAD_REVIEW: 3,
-    AWAITING_LOAD_RELEASE: 3,
-    AWAITING_LOAD_REPLAN: 3,
-    AWAITING_BOOKING_SUBMIT_APPROVAL: 4,
-    SUBMITTING_BOOKING: 4,
-    AWAITING_BOOKING_RESULT: 4,
-    AWAITING_BOOKING_RETRY_APPROVAL: 4,
-    AWAITING_BOOKING_REPLACEMENT: 4,
-    AWAITING_COMPLETION_APPROVAL: 5,
-    COMPLETING_CASE: 5,
-    COMPLETED: 6,
-    FAILED: 6,
-    CANCELLED: 6,
-  }
   const stopped = ['FAILED', 'CANCELLED'].includes(pipelineRun.status)
   const completed = pipelineRun.status === 'COMPLETED'
   const lastBusinessStage = stopped
@@ -233,24 +384,24 @@ const pipeline = computed<PipelineStep[]>(() => {
         .find((stage) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(stage))
     : undefined
   const currentIndex = stopped
-    ? stageIndex[lastBusinessStage ?? 'SYNCING_CASE']
-    : stageIndex[pipelineRun.currentStage]
+    ? businessStageIndex[lastBusinessStage ?? 'SYNCING_CASE']
+    : businessStageIndex[pipelineRun.currentStage]
 
-  return ['范围策略', '数据准备', '资源与激活', '智能装载', 'LINK 订舱', '人工结案'].map(
-    (label, index) => ({
-      code: String(index + 1).padStart(2, '0'),
-      label,
-      state: completed
+  return businessStageLabels.map((label, index) => ({
+    code: String(index + 1).padStart(2, '0'),
+    label,
+    state: !isBusinessStageRequired(pipelineRun, index)
+      ? 'skipped'
+      : completed
         ? 'done'
         : stopped && index >= currentIndex
-        ? 'stopped'
-        : index < currentIndex
-          ? 'done'
-          : index === currentIndex
-            ? 'current'
-            : 'pending',
-    }),
-  )
+          ? 'stopped'
+          : index < currentIndex
+            ? 'done'
+            : index === currentIndex
+              ? 'current'
+              : 'pending',
+  }))
 })
 
 const canStart = computed(
@@ -298,68 +449,6 @@ const canReconcile = computed(
 
 const lastRun = computed(() => history.value[0] ?? null)
 
-const readinessIssueCount = computed(() => {
-  const readiness = run.value?.dataReadiness
-  return readiness?.issueCount ?? readiness?.issueCounts?.total ?? readiness?.issues.length ?? 0
-})
-
-const readinessBlockingCount = computed(() => {
-  const readiness = run.value?.dataReadiness
-  return (
-    readiness?.blockingIssueCount ??
-    readiness?.issueCounts?.blocking ??
-    readiness?.issues.length ??
-    0
-  )
-})
-
-const readinessStatusLabel = computed(() => {
-  const status = run.value?.dataReadiness?.status
-  const labels: Record<string, string> = {
-    LEGACY_BYPASSED: '历史运行未启用',
-    NOT_EVALUATED: '等待检查',
-    ACTION_REQUIRED: '需要补充数据',
-    READY: '业务数据已就绪',
-    DEMO_READY: '演示数据已就绪',
-  }
-  return status ? labels[status] ?? status : '尚未评估'
-})
-
-const readinessTone = computed(() => {
-  const status = run.value?.dataReadiness?.status
-  if (status === 'READY') return 'ready'
-  if (status === 'DEMO_READY' || status === 'LEGACY_BYPASSED') return 'demo'
-  if (status === 'ACTION_REQUIRED') return 'attention'
-  return 'pending'
-})
-
-function readinessSourceLabel(value: string | undefined): string {
-  const labels: Record<string, string> = {
-    NOT_APPLICABLE: '当前策略不适用',
-    OPERATIONAL: '业务数据',
-    DEMO: '脱敏演示数据',
-  }
-  return value ? labels[value] ?? value : '尚未确认'
-}
-
-function readinessCheckedAt(): string | null {
-  const readiness = run.value?.dataReadiness
-  return readiness?.assessedAt ?? readiness?.checkedAt ?? null
-}
-
-function formatDateTime(value: string | null): string {
-  if (!value) return '尚未检查'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '尚未检查'
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
-}
-
 function createIdempotencyKey(prefix: string): string {
   const random =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -392,7 +481,7 @@ async function loadAgent(): Promise<void> {
     }
     lastRefreshedAt.value = new Date()
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '读取 Shipment Agent 失败'
+    loadError.value = error instanceof Error ? error.message : '读取自动处理状态失败'
   } finally {
     loading.value = false
   }
@@ -420,7 +509,7 @@ async function startAgent(): Promise<void> {
     lastRefreshedAt.value = new Date()
     emit('caseChanged')
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '启动 Shipment Agent 失败'
+    actionError.value = error instanceof Error ? error.message : '开始自动处理失败'
   } finally {
     actionBusy.value = false
   }
@@ -522,9 +611,9 @@ onMounted(loadAgent)
       <div class="agent-command-identity">
         <span class="agent-orb"><UiIcon name="server" /></span>
         <div>
-          <span>智能协同作业</span>
-          <h3>发运智能协同</h3>
-          <p>自动检查业务数据并协调装载与订舱；遇到缺失、冲突或高风险动作时交给业务人员确认。</p>
+          <span>本票自动协同</span>
+          <h3>当前处理进度</h3>
+          <p>系统按顺序核验资料、推进装载和订舱；遇到缺失或风险动作时，会明确交给对应人员处理。</p>
         </div>
       </div>
 
@@ -538,14 +627,14 @@ onMounted(loadAgent)
           {{ loading ? '同步中' : '刷新' }}
         </button>
         <RouterLink to="/tradeops/agents">
-          运行中心
+          自动化记录
           <UiIcon name="arrow" />
         </RouterLink>
       </div>
     </header>
 
     <div v-if="loadError" class="agent-inline-error" role="alert">
-      <strong>Agent 状态读取失败</strong>
+      <strong>自动处理状态读取失败</strong>
       <span>{{ loadError }}</span>
       <button type="button" @click="loadAgent">重试</button>
     </div>
@@ -553,139 +642,62 @@ onMounted(loadAgent)
     <div v-if="loading && !run && history.length === 0" class="agent-panel-loading">
       <span></span>
       <div>
-        <strong>正在读取总 Agent 状态</strong>
-        <p>GET 只读取事实，不会隐式启动、提交或推进流程。</p>
+        <strong>正在读取本票处理状态</strong>
+        <p>本次刷新只同步最新结果，不会重复提交任何业务动作。</p>
       </div>
     </div>
 
     <template v-else>
-      <div class="agent-pipeline" aria-label="Shipment Agent 计划">
-        <div
-          v-for="step in pipeline"
-          :key="step.code"
-          class="agent-pipeline-step"
-          :data-state="step.state"
-        >
-          <span>
-            <UiIcon v-if="step.state === 'done'" name="check" />
-            <template v-else>{{ step.code }}</template>
+      <section class="business-focus-card" :data-tone="businessFocus.tone">
+        <div class="business-focus-heading">
+          <div>
+            <span>当前业务判断</span>
+            <h4>{{ businessFocus.phase }}</h4>
+          </div>
+          <span class="business-status">
+            {{ displayRun ? statusLabels[displayRun.status] : '等待开始' }}
           </span>
-          <strong>{{ step.label }}</strong>
-        </div>
-      </div>
-
-      <section v-if="run" class="agent-current-state" :data-status="run.status">
-        <div class="agent-state-copy">
-          <span>{{ currentCopy.eyebrow }}</span>
-          <h4>{{ currentCopy.title }}</h4>
-          <p>{{ currentCopy.description }}</p>
-        </div>
-        <div class="agent-state-facts">
-          <div>
-            <span>自动作业状态</span>
-            <strong>{{ statusLabels[run.status] }}</strong>
-          </div>
-          <div>
-            <span>数据准备</span>
-            <strong>{{ readinessStatusLabel }}</strong>
-          </div>
-          <div>
-            <span>阻塞问题</span>
-            <strong>{{ readinessBlockingCount }} 项</strong>
-          </div>
-          <div>
-            <span>下一步</span>
-            <strong>{{ currentCopy.title }}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section
-        v-if="run?.dataReadiness"
-        class="data-readiness-board"
-        :data-tone="readinessTone"
-      >
-        <div class="readiness-scorecard">
-          <span class="readiness-icon">
-            <UiIcon :name="readinessTone === 'ready' ? 'check' : 'alert'" />
-          </span>
-          <div>
-            <span>DATA READINESS</span>
-            <h4>{{ readinessStatusLabel }}</h4>
-            <p>
-              {{
-                readinessTone === 'ready'
-                  ? '库存与主数据已通过当前策略检查，可以继续执行专业支线。'
-                  : readinessTone === 'demo'
-                    ? '当前使用演示或兼容模式，页面会明确保留数据来源，不冒充生产真值。'
-                    : readinessTone === 'attention'
-                      ? '系统已停止向下执行，请先补充缺失库存或确认主数据。'
-                      : '系统将在进入装载和订舱前先核对业务数据。'
-              }}
-            </p>
-          </div>
-          <span class="readiness-status-pill">{{ readinessStatusLabel }}</span>
         </div>
 
-        <div class="readiness-metrics">
-          <div>
-            <span>问题总数</span>
-            <strong>{{ readinessIssueCount }}</strong>
-          </div>
-          <div>
-            <span>阻塞问题</span>
-            <strong>{{ readinessBlockingCount }}</strong>
-          </div>
-          <div>
-            <span>数据模式</span>
-            <strong>{{ readinessSourceLabel(run.dataReadiness.sourceMode) }}</strong>
-          </div>
-          <div>
-            <span>最近检查</span>
-            <strong>{{ formatDateTime(readinessCheckedAt()) }}</strong>
-          </div>
-        </div>
-
-        <div v-if="run.dataReadiness.issues.length" class="readiness-issue-summary">
-          <article v-for="issue in run.dataReadiness.issues.slice(0, 4)" :key="issue.issueId">
-            <span><UiIcon name="alert" /></span>
-            <div>
-              <strong>{{ issue.subjectCode }}</strong>
-              <p>{{ issue.message }}</p>
-            </div>
-            <small>{{ issue.ownerRole === 'WAREHOUSE_OPERATOR' ? '仓库业务员' : issue.ownerRole }}</small>
+        <div class="business-focus-grid">
+          <article>
+            <span>当前阶段</span>
+            <strong>{{ businessFocus.phase }}</strong>
           </article>
-          <p v-if="run.dataReadiness.issues.length > 4" class="readiness-more">
-            另有 {{ run.dataReadiness.issues.length - 4 }} 项问题，可在下方补数任务中统一处理。
-          </p>
+          <article>
+            <span>当前情况</span>
+            <strong>{{ businessFocus.reason }}</strong>
+          </article>
+          <article>
+            <span>当前责任人</span>
+            <strong>{{ businessFocus.owner }}</strong>
+          </article>
+          <article class="next-action">
+            <span>下一步</span>
+            <strong>{{ businessFocus.nextAction }}</strong>
+          </article>
         </div>
       </section>
 
-      <section v-else class="agent-start-card">
+      <section v-if="!run && (!lastRun || canStart)" class="agent-start-card">
         <span class="agent-start-icon"><UiIcon name="layers" /></span>
         <div>
-          <span>{{ lastRun ? 'NO ACTIVE RUN' : 'READY TO START' }}</span>
+          <span>{{ lastRun ? '可以重新发起' : '等待开始' }}</span>
           <h4>
-            {{
-              lastRun?.status === 'COMPLETED'
-                ? '最近一次智能协同已经完成'
-                : lastRun
-                  ? '当前没有活动运行'
-                  : '让一票案件真正进入 Agent 闭环'
-            }}
+            {{ lastRun ? '当前没有正在执行的自动流程' : '开始处理本票发运案件' }}
           </h4>
           <p v-if="lastRun">
-            最近一次运行状态为 {{ statusLabels[lastRun.status] }}，历史 Trace 保留在运行中心。
-            如案件仍需继续，可基于当前 revision 启动新运行。
+            上一次状态为“{{ statusLabels[lastRun.status] }}”。如果业务仍需继续，系统会基于案件当前资料重新检查，
+            不会沿用过期快照。
           </p>
           <p v-else>
-            Agent 会先读取案件场景与已绑定资源；缺少资料时安全暂停，不会凭空创建任务，
-            也不会绕过 LINK 提交和结案审批。
+            系统会先核验运输场景、库存和已关联作业；资料不足时会生成明确待办，
+            不会跳过提交审批或结案确认。
           </p>
         </div>
         <button v-if="canStart" type="button" :disabled="actionBusy" @click="startAgent">
           <UiIcon name="plus" />
-          {{ actionBusy ? '正在启动…' : '启动总 Agent' }}
+          {{ actionBusy ? '正在开始…' : '开始自动处理' }}
         </button>
       </section>
 
@@ -714,7 +726,7 @@ onMounted(loadAgent)
                 isAutomaticRecoveryState
                   ? '自动执行已提交，正在等待恢复'
                   : run.status === 'WAITING_EXTERNAL'
-                  ? '当前正在等待外部异步状态'
+                  ? '正在等待承运人回复'
                   : '请先完成专业工作台中的待办'
               }}
             </strong>
@@ -738,6 +750,25 @@ onMounted(loadAgent)
           </button>
         </section>
 
+        <div class="agent-pipeline" aria-label="发运业务进度">
+          <div
+            v-for="step in pipeline"
+            :key="step.code"
+            class="agent-pipeline-step"
+            :data-state="step.state"
+          >
+            <span>
+              <UiIcon v-if="step.state === 'done'" name="check" />
+              <template v-else-if="step.state === 'skipped'">—</template>
+              <template v-else>{{ step.code }}</template>
+            </span>
+            <strong>
+              {{ step.label }}
+              <small v-if="step.state === 'skipped'">不适用</small>
+            </strong>
+          </div>
+        </div>
+
         <section class="agent-detail-main">
           <ShipmentAgentWorkstreams :run="run" />
         </section>
@@ -746,7 +777,7 @@ onMounted(loadAgent)
           <summary>
             <span>
               <UiIcon name="server" />
-              Agent 技术详情与运行轨迹
+              自动化技术详情与运行轨迹
             </span>
             <small>默认收起，供开发、审计和故障排查使用</small>
           </summary>
@@ -755,14 +786,45 @@ onMounted(loadAgent)
             <div><span>当前节点</span><code>{{ run.currentStage }}</code></div>
             <div><span>工作流版本</span><code>{{ run.workflowVersion }}</code></div>
             <div><span>策略 / 运行版本</span><code>{{ run.policyVersion }} · R{{ run.runVersion }}</code></div>
+            <div v-if="run.childAgent">
+              <span>装载子运行</span>
+              <code>{{ run.childAgent.runId }}</code>
+            </div>
+            <div v-if="run.childAgent">
+              <span>子运行状态 / 版本</span>
+              <code>{{ run.childAgent.status }} · R{{ run.childAgent.runVersion }}</code>
+            </div>
           </div>
           <ShipmentAgentTrace :events="run.events" />
         </details>
       </template>
 
-      <details v-else-if="lastRun" class="agent-technical-details">
+      <div v-else class="agent-pipeline" aria-label="发运业务进度">
+        <div
+          v-for="step in pipeline"
+          :key="step.code"
+          class="agent-pipeline-step"
+          :data-state="step.state"
+        >
+          <span>
+            <UiIcon v-if="step.state === 'done'" name="check" />
+            <template v-else-if="step.state === 'skipped'">—</template>
+            <template v-else>{{ step.code }}</template>
+          </span>
+          <strong>
+            {{ step.label }}
+            <small v-if="step.state === 'skipped'">不适用</small>
+          </strong>
+        </div>
+      </div>
+
+      <section v-if="!run && lastRun" class="agent-detail-main">
+        <ShipmentAgentWorkstreams :run="lastRun" />
+      </section>
+
+      <details v-if="!run && lastRun" class="agent-technical-details">
         <summary>
-          <span><UiIcon name="clock" />最近一次 Agent 运行记录</span>
+          <span><UiIcon name="clock" />最近一次自动处理记录</span>
           <small>{{ statusLabels[lastRun.status] }}，点击查看审计轨迹</small>
         </summary>
         <ShipmentAgentTrace :events="lastRun.events" />
@@ -958,9 +1020,117 @@ onMounted(loadAgent)
   font-size: 12px;
 }
 
+.business-focus-card {
+  overflow: hidden;
+  border: 1px solid #d9e5df;
+  border-radius: 15px;
+  background:
+    linear-gradient(120deg, rgba(238, 247, 242, 0.94), rgba(255, 255, 255, 0.98));
+}
+
+.business-focus-card[data-tone="attention"] {
+  border-color: #e6d1a7;
+  background:
+    linear-gradient(120deg, rgba(255, 247, 229, 0.94), rgba(255, 255, 255, 0.98));
+}
+
+.business-focus-card[data-tone="danger"] {
+  border-color: #e8caca;
+  background:
+    linear-gradient(120deg, rgba(255, 241, 241, 0.94), rgba(255, 255, 255, 0.98));
+}
+
+.business-focus-card[data-tone="success"] {
+  border-color: #bfdccb;
+  background:
+    linear-gradient(120deg, rgba(234, 247, 239, 0.94), rgba(255, 255, 255, 0.98));
+}
+
+.business-focus-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 17px 13px;
+  border-bottom: 1px solid rgba(216, 226, 221, 0.86);
+}
+
+.business-focus-heading > div > span {
+  color: #6b8479;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: 0.13em;
+}
+
+.business-focus-heading h4 {
+  margin: 5px 0 0;
+  color: #23352e;
+  font-size: 19px;
+}
+
+.business-status {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #315f4f;
+  background: rgba(220, 239, 230, 0.88);
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+[data-tone="attention"] .business-status {
+  color: #805d1f;
+  background: #f5e5c4;
+}
+
+[data-tone="danger"] .business-status {
+  color: #8b4848;
+  background: #f6dddd;
+}
+
+.business-focus-grid {
+  display: grid;
+  grid-template-columns: 0.75fr 1.65fr 0.9fr 1.4fr;
+}
+
+.business-focus-grid article {
+  min-width: 0;
+  padding: 15px 17px 17px;
+  border-right: 1px solid rgba(222, 230, 226, 0.86);
+}
+
+.business-focus-grid article:last-child {
+  border-right: 0;
+}
+
+.business-focus-grid span,
+.business-focus-grid strong {
+  display: block;
+}
+
+.business-focus-grid span {
+  color: #87938e;
+  font-size: 11px;
+}
+
+.business-focus-grid strong {
+  margin-top: 7px;
+  color: #34433d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.business-focus-grid .next-action {
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.business-focus-grid .next-action strong {
+  color: #285d4b;
+}
+
 .agent-pipeline {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid #e4e9e7;
   border-radius: 12px;
@@ -1006,6 +1176,13 @@ onMounted(loadAgent)
   white-space: nowrap;
 }
 
+.agent-pipeline-step strong small {
+  display: block;
+  margin-top: 2px;
+  font-size: 9px;
+  font-weight: 650;
+}
+
 .agent-pipeline-step[data-state="done"] {
   color: #3f755f;
   background: #f2f8f5;
@@ -1034,82 +1211,22 @@ onMounted(loadAgent)
   background: #fcf4f4;
 }
 
-.agent-current-state {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(430px, 1fr);
-  gap: 18px;
-  align-items: center;
-  padding: 17px;
-  border: 1px solid #dce6e1;
-  border-radius: 14px;
+.agent-pipeline-step[data-state="skipped"] {
+  color: #98a19d;
   background:
-    linear-gradient(100deg, #f4f8f6, #fbfdfc);
+    repeating-linear-gradient(
+      -45deg,
+      #f7f9f8,
+      #f7f9f8 7px,
+      #f2f5f3 7px,
+      #f2f5f3 14px
+    );
 }
 
-.agent-state-copy > span {
-  color: #628273;
-  font-size: 11px;
-  font-weight: 760;
-  letter-spacing: 0.14em;
-}
-
-.agent-state-copy h4,
-.agent-state-copy p {
-  margin: 0;
-}
-
-.agent-state-copy h4 {
-  margin-top: 6px;
-  color: #26352f;
-  font-size: 18px;
-}
-
-.agent-state-copy p {
-  margin-top: 6px;
-  color: #6d7a75;
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.agent-state-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid #e1e7e4;
-  border-radius: 10px;
-  background: #e1e7e4;
-}
-
-.agent-state-facts > div {
-  min-width: 0;
-  padding: 10px;
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.agent-state-facts span,
-.agent-state-facts strong,
-.agent-state-facts code {
-  display: block;
-}
-
-.agent-state-facts span {
-  color: #929c98;
-  font-size: 11px;
-}
-
-.agent-state-facts strong,
-.agent-state-facts code {
-  overflow: hidden;
-  margin-top: 5px;
-  color: #34433d;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-state-facts code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.agent-pipeline-step[data-state="skipped"] > span {
+  border-style: dashed;
+  color: #9ba5a1;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .agent-start-card,
@@ -1210,217 +1327,12 @@ onMounted(loadAgent)
   font-size: 14px;
 }
 
-.agent-detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.8fr);
-  gap: 17px;
-  align-items: start;
-}
-
-.agent-detail-main,
-.agent-detail-trace,
-.agent-last-trace {
+.agent-detail-main {
   min-width: 0;
   padding: 16px;
   border: 1px solid #e4e9e7;
   border-radius: 14px;
   background: #fff;
-}
-
-.data-readiness-board {
-  display: grid;
-  gap: 13px;
-  padding: 17px;
-  border: 1px solid #dfe6e3;
-  border-radius: 14px;
-  background: #fafcfb;
-}
-
-.data-readiness-board[data-tone="ready"] {
-  border-color: #bfdccc;
-  background: #f3faf6;
-}
-
-.data-readiness-board[data-tone="attention"] {
-  border-color: #e7d1a7;
-  background: #fffaf0;
-}
-
-.data-readiness-board[data-tone="demo"] {
-  border-color: #cfdaea;
-  background: #f5f8fc;
-}
-
-.readiness-scorecard {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-}
-
-.readiness-icon {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border-radius: 12px;
-  color: #6f7f78;
-  background: #e8eeeb;
-}
-
-[data-tone="ready"] .readiness-icon {
-  color: #347055;
-  background: #dcefe4;
-}
-
-[data-tone="attention"] .readiness-icon {
-  color: #92691f;
-  background: #f5e7c8;
-}
-
-[data-tone="demo"] .readiness-icon {
-  color: #4f7298;
-  background: #e4edf8;
-}
-
-.readiness-icon :deep(.ui-icon) {
-  width: 19px;
-}
-
-.readiness-scorecard > div > span {
-  color: #788882;
-  font-size: 11px;
-  font-weight: 760;
-  letter-spacing: 0.1em;
-}
-
-.readiness-scorecard h4,
-.readiness-scorecard p {
-  margin: 0;
-}
-
-.readiness-scorecard h4 {
-  margin-top: 4px;
-  color: #2f3d37;
-  font-size: 16px;
-}
-
-.readiness-scorecard p {
-  margin-top: 4px;
-  color: #71807a;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.readiness-status-pill {
-  padding: 6px 9px;
-  border-radius: 999px;
-  color: #5d6c66;
-  background: #e9eeec;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-[data-tone="ready"] .readiness-status-pill {
-  color: #2e694f;
-  background: #dcefe4;
-}
-
-[data-tone="attention"] .readiness-status-pill {
-  color: #815e20;
-  background: #f3e4c3;
-}
-
-[data-tone="demo"] .readiness-status-pill {
-  color: #45698f;
-  background: #e3edf8;
-}
-
-.readiness-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.readiness-metrics > div {
-  min-width: 0;
-  padding: 10px 11px;
-  border: 1px solid rgba(217, 226, 222, 0.9);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.78);
-}
-
-.readiness-metrics span,
-.readiness-metrics strong {
-  display: block;
-}
-
-.readiness-metrics span {
-  color: #89958f;
-  font-size: 11px;
-}
-
-.readiness-metrics strong {
-  overflow: hidden;
-  margin-top: 4px;
-  color: #38463f;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.readiness-issue-summary {
-  display: grid;
-  gap: 7px;
-}
-
-.readiness-issue-summary article {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 9px;
-  align-items: start;
-  padding: 10px 11px;
-  border: 1px solid #e7d8bc;
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.76);
-}
-
-.readiness-issue-summary article > span {
-  color: #956b25;
-}
-
-.readiness-issue-summary article > span :deep(.ui-icon) {
-  width: 15px;
-}
-
-.readiness-issue-summary strong,
-.readiness-issue-summary p {
-  display: block;
-  margin: 0;
-}
-
-.readiness-issue-summary strong {
-  color: #4e4434;
-  font-size: 12px;
-}
-
-.readiness-issue-summary p {
-  margin-top: 3px;
-  color: #746957;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.readiness-issue-summary small {
-  color: #8a795c;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.readiness-more {
-  margin: 1px 0 0 35px;
-  color: #8c7b61;
-  font-size: 11px;
 }
 
 .agent-technical-details {
@@ -1520,15 +1432,22 @@ onMounted(loadAgent)
     justify-content: flex-end;
   }
 
-  .agent-current-state {
-    grid-template-columns: 1fr;
+  .business-focus-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .agent-detail-grid {
-    grid-template-columns: 1fr;
+  .business-focus-grid article {
+    border-bottom: 1px solid rgba(222, 230, 226, 0.86);
   }
 
-  .readiness-metrics,
+  .business-focus-grid article:nth-child(2) {
+    border-right: 0;
+  }
+
+  .business-focus-grid article:nth-child(n + 3) {
+    border-bottom: 0;
+  }
+
   .technical-fact-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1567,19 +1486,18 @@ onMounted(loadAgent)
     border-bottom: 0;
   }
 
-  .agent-state-facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .business-focus-grid {
+    grid-template-columns: 1fr;
   }
 
-  .readiness-scorecard,
-  .readiness-issue-summary article {
-    grid-template-columns: auto minmax(0, 1fr);
+  .business-focus-grid article,
+  .business-focus-grid article:nth-child(n + 3) {
+    border-right: 0;
+    border-bottom: 1px solid rgba(222, 230, 226, 0.86);
   }
 
-  .readiness-status-pill,
-  .readiness-issue-summary article > small {
-    grid-column: 2;
-    justify-self: start;
+  .business-focus-grid article:last-child {
+    border-bottom: 0;
   }
 
   .agent-start-card,

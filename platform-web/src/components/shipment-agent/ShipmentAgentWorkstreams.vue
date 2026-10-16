@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import type { ShipmentAgentCapability, ShipmentAgentRun } from '@/api/platform'
+import type {
+  LinkCarrierSubmission,
+  ShipmentAgentCapability,
+  ShipmentAgentRun,
+} from '@/api/platform'
 import UiIcon from '@/components/UiIcon.vue'
 
 const props = defineProps<{
@@ -9,10 +13,10 @@ const props = defineProps<{
 }>()
 
 interface WorkstreamView {
-  capability: ShipmentAgentCapability | 'DATA_READINESS'
-  eyebrow: string
+  capability: ShipmentAgentCapability
+  category: string
   title: string
-  icon: 'box' | 'database' | 'file'
+  icon: 'box' | 'database'
   required: boolean
   reference: string | null
   state: 'ready' | 'attention' | 'waiting' | 'inactive'
@@ -41,85 +45,48 @@ const bookingStages = new Set([
 ])
 
 const workstreams = computed<WorkstreamView[]>(() => [
-  buildDataReadinessWorkstream(),
   buildLoadWorkstream(),
   buildBookingWorkstream(),
 ])
 
-function buildDataReadinessWorkstream(): WorkstreamView {
-  const readiness = props.run.dataReadiness
-  const issueCount =
-    readiness?.blockingIssueCount ??
-    readiness?.issueCounts?.blocking ??
-    readiness?.issues.length ??
-    0
-
-  let state: WorkstreamView['state'] = 'waiting'
-  let statusLabel = '等待检查'
-  let description = '系统会先检查库存、货物和托盘主数据，再进入装载与订舱。'
-
-  if (readiness?.status === 'READY') {
-    state = 'ready'
-    statusLabel = '业务数据已就绪'
-    description = '当前策略要求的数据已经通过检查，专业支线可以继续推进。'
-  } else if (readiness?.status === 'DEMO_READY') {
-    state = 'waiting'
-    statusLabel = '演示数据已就绪'
-    description = '当前使用明确标记的脱敏演示数据，不代表已经连接企业 ERP 或 WMS。'
-  } else if (readiness?.status === 'ACTION_REQUIRED') {
-    state = 'attention'
-    statusLabel = `${issueCount} 项待补充`
-    description = 'Agent 已暂停，等待仓库或业务人员补充库存、核对主数据。'
-  } else if (readiness?.status === 'LEGACY_BYPASSED') {
-    state = 'inactive'
-    statusLabel = '历史运行兼容'
-    description = '这次旧运行没有经过 V2 数据门禁；不能据此宣称库存或主数据已经确认。'
-  }
-
-  return {
-    capability: 'DATA_READINESS',
-    eyebrow: 'BUSINESS DATA GATE',
-    title: '数据准备与库存核对',
-    icon: 'file',
-    required: true,
-    reference: readiness?.snapshotHash ? readiness.snapshotHash.slice(0, 12) : null,
-    state,
-    statusLabel,
-    description,
-    metricLabel: '阻塞问题',
-    metricValue: `${issueCount}`,
-    route: null,
-    actionLabel:
-      readiness?.status === 'ACTION_REQUIRED'
-        ? '请在上方补数任务中处理'
-        : '由总 Agent 自动检查',
-  }
-}
-
 function buildLoadWorkstream(): WorkstreamView {
+  const policyConfirmed = props.run.scenarioPolicyConfirmed
   const required = props.run.requiredCapabilities.includes('LOAD_PLANNING')
+  const enabled = policyConfirmed && required
   const reference = props.run.selectedLoadTaskNumber
   const locked = props.run.lockedLoadVersionNumber !== null
   const inStage = loadStages.has(props.run.currentStage)
 
-  let state: WorkstreamView['state'] = required ? 'waiting' : 'inactive'
-  let statusLabel = required ? '等待编排' : '本票不启用'
-  let description = required
-    ? '等待总 Agent 读取装载任务和专业运行状态。'
-    : '当前能力策略没有要求装载规划。'
+  let state: WorkstreamView['state'] = !policyConfirmed
+    ? 'waiting'
+    : enabled
+      ? 'waiting'
+      : 'inactive'
+  let statusLabel = !policyConfirmed
+    ? '待确认业务范围'
+    : enabled
+      ? '等待编排'
+      : '本票不启用'
+  let description = !policyConfirmed
+    ? '请先确认本票是否需要智能装载；系统不会在范围未定时自行启动作业。'
+    : enabled
+      ? '系统正在读取装载任务的最新状态。'
+      : '当前能力策略没有要求装载规划。'
 
-  if (locked) {
+  // enabled 必须参与每个分支判断。即使历史字段中残留作业编号，
+  // 也不能把当前策略未启用的能力画成“已完成”。
+  if (enabled && locked) {
     state = 'ready'
     statusLabel = `正式 V${props.run.lockedLoadVersionNumber}`
     description = '装载方案已经人工批准并锁定为不可变正式版本。'
-  } else if (inStage) {
+  } else if (enabled && inStage) {
     state =
       props.run.currentStage === 'STARTING_LOAD_AGENT' ? 'waiting' : 'attention'
     const copy: Partial<Record<ShipmentAgentRun['currentStage'], [string, string]>> = {
-      STARTING_LOAD_AGENT: ['正在启动', '总 Agent 正在幂等启动已绑定任务的装载 Agent。'],
+      STARTING_LOAD_AGENT: ['正在启动', '系统正在安全启动已绑定的装载任务，不会重复创建。'],
       AWAITING_LOAD_CONSTRAINTS: [
         '等待补约束',
-        '装载子 Agent 已暂停，需在专业工作台补充箱规或安全约束。',
+        '智能装载已暂停，请在专业工作台补充箱规或安全约束。',
       ],
       AWAITING_LOAD_REVIEW: [
         '等待方案审批',
@@ -136,65 +103,130 @@ function buildLoadWorkstream(): WorkstreamView {
     }
     ;[statusLabel, description] = copy[props.run.currentStage] ?? [
       '需要处理',
-      '装载支线正在等待专业动作。',
+      '装载作业正在等待业务人员处理。',
     ]
-  } else if (required && !reference) {
+  } else if (enabled && !reference) {
     state = 'attention'
     statusLabel = '缺少绑定'
-    description = '案件尚未选定装载任务，总 Agent 不会自动创建业务资源。'
-  } else if (required && reference) {
+    description = '案件尚未选定装载任务，系统不会凭空创建业务任务。'
+  } else if (enabled && reference) {
     state = 'waiting'
     statusLabel = '已选定任务'
-    description = '总 Agent 将按案件顺序同步该任务的实时状态。'
+    description = '系统会按本票流程同步该任务的最新状态。'
   }
 
   return {
     capability: 'LOAD_PLANNING',
-    eyebrow: 'WAREHOUSE & LOAD',
-    title: '智能装载 Agent',
+    category: '装载作业',
+    title: '智能装载',
     icon: 'box',
     required,
     reference,
     state,
     statusLabel,
     description,
-    metricLabel: '正式版本',
-    metricValue:
-      props.run.lockedLoadVersionNumber !== null
-        ? `V${props.run.lockedLoadVersionNumber}`
-        : '—',
-    route: reference
-      ? `/supply-chain/load-planning/tasks?taskNumber=${encodeURIComponent(reference)}&view=planning`
-      : '/supply-chain/load-planning/tasks',
-    actionLabel: reference ? '进入装载任务' : '打开装载任务中心',
+    metricLabel: '现场执行版本',
+    metricValue: !policyConfirmed
+      ? '待确认'
+      : !required
+        ? '不适用'
+        : props.run.lockedLoadVersionNumber !== null
+          ? `已发布 V${props.run.lockedLoadVersionNumber}`
+          : '尚未发布',
+    route: !enabled
+      ? null
+      : reference
+        ? `/supply-chain/load-planning/tasks?taskNumber=${encodeURIComponent(reference)}&view=planning`
+        : '/supply-chain/load-planning/tasks',
+    actionLabel: !policyConfirmed
+      ? '确认业务范围后继续'
+      : !required
+        ? '本票无需操作'
+        : reference
+          ? '进入装载任务'
+          : '打开装载任务中心',
   }
 }
 
+function bookingStatusLabel(value: string | null): string {
+  const labels: Record<string, string> = {
+    DRAFT: '草稿待核对',
+    READY_TO_SUBMIT: '等待提交',
+    SUBMITTED: '已提交',
+    PENDING: '承运人处理中',
+    CONFIRMED: '承运人已确认',
+    REJECTED: '承运人已拒绝',
+    CANCELLED: '申请已取消',
+    NOT_SUBMITTED: '尚未提交',
+    SUBMISSION_PENDING: '正在提交',
+    SUBMISSION_UNCERTAIN: '提交结果待确认',
+    DELIVERED: '已送达承运人',
+    FAILED: '投递失败',
+  }
+  return value ? labels[value] ?? value : '尚未开始'
+}
+
+const carrierStatusLabels = {
+  PENDING: '等待投递',
+  SENDING: '正在发送',
+  RETRY_WAIT: '等待重试',
+  ACCEPTED: '承运人已受理',
+  PROCESSING: '承运人处理中',
+  CONFIRMED: '承运人已确认',
+  REJECTED: '承运人已拒绝',
+  DEAD: '投递失败，待人工重试',
+  CANCELLED: '投递已取消',
+} satisfies Record<LinkCarrierSubmission['status'], string>
+
+function carrierStatusLabel(value: string): string {
+  return (
+    carrierStatusLabels[value as LinkCarrierSubmission['status']] ??
+    bookingStatusLabel(value)
+  )
+}
+
 function buildBookingWorkstream(): WorkstreamView {
+  const policyConfirmed = props.run.scenarioPolicyConfirmed
   const required = props.run.requiredCapabilities.includes('LINK_BOOKING')
+  const enabled = policyConfirmed && required
   const reference = props.run.selectedBookingApplicationNumber
   const confirmed = props.run.bookingStatus === 'CONFIRMED'
   const inStage = bookingStages.has(props.run.currentStage)
 
-  let state: WorkstreamView['state'] = required ? 'waiting' : 'inactive'
-  let statusLabel = required ? '等待编排' : '本票不启用'
-  let description = required
-    ? '等待总 Agent 读取 LINK 申请和承运人提交状态。'
-    : '当前能力策略没有要求 LINK 订舱。'
+  let state: WorkstreamView['state'] = !policyConfirmed
+    ? 'waiting'
+    : enabled
+      ? 'waiting'
+      : 'inactive'
+  let statusLabel = !policyConfirmed
+    ? '待确认业务范围'
+    : enabled
+      ? '等待编排'
+      : '本票不启用'
+  let description = !policyConfirmed
+    ? '请先确认本票是否需要 LINK 订舱；系统不会在范围未定时创建或提交申请。'
+    : enabled
+      ? '系统正在读取 LINK 申请和承运人状态。'
+      : '当前能力策略没有要求 LINK 订舱。'
 
-  if (confirmed) {
+  // 非必需能力只说明策略结果，不显示为已完成，也不提供进入无关作业的操作入口。
+  if (enabled && confirmed) {
     state = 'ready'
     statusLabel = '承运人已确认'
     description = 'LINK 已收到异步确认，订舱参考号已回写到专业系统。'
-  } else if (inStage) {
+  } else if (enabled && inStage) {
     state =
-      props.run.currentStage === 'AWAITING_BOOKING_RESULT' ? 'waiting' : 'attention'
+      ['SUBMITTING_BOOKING', 'AWAITING_BOOKING_RESULT'].includes(
+        props.run.currentStage,
+      )
+        ? 'waiting'
+        : 'attention'
     const copy: Partial<Record<ShipmentAgentRun['currentStage'], [string, string]>> = {
       AWAITING_BOOKING_SUBMIT_APPROVAL: [
         '等待提交批准',
         '七步填单草稿已就绪，提交外部系统前必须人工确认。',
       ],
-      SUBMITTING_BOOKING: ['正在提交', '总 Agent 正在执行已批准的 LINK 提交动作。'],
+      SUBMITTING_BOOKING: ['正在提交', '系统正在执行已经批准的 LINK 提交动作。'],
       AWAITING_BOOKING_RESULT: [
         '等待承运人',
         '申请已提交；流程不占用线程，等待异步回调后再重新检查。',
@@ -210,34 +242,48 @@ function buildBookingWorkstream(): WorkstreamView {
     }
     ;[statusLabel, description] = copy[props.run.currentStage] ?? [
       '需要处理',
-      '订舱支线正在等待专业动作。',
+      '订舱作业正在等待业务人员处理。',
     ]
-  } else if (required && !reference) {
+  } else if (enabled && !reference) {
     state = 'attention'
     statusLabel = '缺少绑定'
-    description = '案件尚未选定 LINK 申请，总 Agent 不会自动创建订舱草稿。'
-  } else if (required && reference) {
+    description = '案件尚未选定 LINK 申请，系统不会凭空创建订舱草稿。'
+  } else if (enabled && reference) {
     state = 'waiting'
-    statusLabel = props.run.bookingStatus || '已选定申请'
-    description = '总 Agent 将根据申请和承运人状态决定下一步。'
+    statusLabel = bookingStatusLabel(props.run.bookingStatus) || '已选定申请'
+    description = '系统会根据申请和承运人状态决定下一步。'
   }
 
   return {
     capability: 'LINK_BOOKING',
-    eyebrow: 'CARRIER BOOKING',
-    title: 'LINK 七步订舱技能',
+    category: '订舱作业',
+    title: 'LINK 七步订舱',
     icon: 'database',
     required,
     reference,
     state,
     statusLabel,
     description,
-    metricLabel: '承运人状态',
-    metricValue: props.run.carrierSubmissionStatus || props.run.bookingStatus || '—',
-    route: reference
-      ? `/link-booking/applications?applicationNumber=${encodeURIComponent(reference)}&view=detail`
-      : '/link-booking/applications',
-    actionLabel: reference ? '进入 LINK 申请' : '打开 LINK 工作台',
+    metricLabel: '承运人进度',
+    metricValue: !policyConfirmed
+      ? '待确认'
+      : !required
+        ? '不适用'
+        : props.run.carrierSubmissionStatus
+          ? carrierStatusLabel(props.run.carrierSubmissionStatus)
+          : bookingStatusLabel(props.run.bookingStatus),
+    route: !enabled
+      ? null
+      : reference
+        ? `/link-booking/applications?applicationNumber=${encodeURIComponent(reference)}&view=detail`
+        : '/link-booking/applications',
+    actionLabel: !policyConfirmed
+      ? '确认业务范围后继续'
+      : !required
+        ? '本票无需操作'
+        : reference
+          ? '进入 LINK 申请'
+          : '打开 LINK 工作台',
   }
 }
 </script>
@@ -246,9 +292,9 @@ function buildBookingWorkstream(): WorkstreamView {
   <section class="agent-workstreams">
     <div class="workstreams-heading">
       <div>
-        <span>业务执行支线</span>
-        <h4>数据、装载与订舱进度</h4>
-        <p>先保证输入可信，再协调专业作业；遇到问题会生成明确的人工任务。</p>
+        <span>专业作业结果</span>
+        <h4>智能装载与 LINK 订舱</h4>
+        <p>这里显示本票可能涉及的两项专业作业；未启用的环节会明确标记为不适用。</p>
       </div>
       <span class="workstream-legend"><i></i> 最近一次权威状态</span>
     </div>
@@ -263,7 +309,7 @@ function buildBookingWorkstream(): WorkstreamView {
         <div class="workstream-topline">
           <span class="workstream-mark"><UiIcon :name="workstream.icon" /></span>
           <div>
-            <span>{{ workstream.eyebrow }}</span>
+            <span>{{ workstream.category }}</span>
             <h5>{{ workstream.title }}</h5>
           </div>
           <span class="workstream-state">{{ workstream.statusLabel }}</span>
@@ -273,7 +319,7 @@ function buildBookingWorkstream(): WorkstreamView {
 
         <dl>
           <div>
-            <dt>{{ workstream.capability === 'DATA_READINESS' ? '数据快照' : '业务引用' }}</dt>
+            <dt>作业编号</dt>
             <dd>{{ workstream.reference || '尚未选定' }}</dd>
           </div>
           <div>
@@ -281,25 +327,6 @@ function buildBookingWorkstream(): WorkstreamView {
             <dd>{{ workstream.metricValue }}</dd>
           </div>
         </dl>
-
-        <div
-          v-if="workstream.capability === 'LOAD_PLANNING' && run.childAgent"
-          class="child-agent-strip"
-        >
-          <span>
-            <small>子 Agent 运行</small>
-            <code>{{ run.childAgent.runId }}</code>
-          </span>
-          <span>
-            <small>状态 / 版本</small>
-            <strong>{{ run.childAgent.status }} · R{{ run.childAgent.runVersion }}</strong>
-          </span>
-          <span>
-            <small>当前步骤</small>
-            <strong>{{ run.childAgent.currentStep }}</strong>
-          </span>
-          <p>{{ run.childAgent.nextAction }}</p>
-        </div>
 
         <div
           v-if="
@@ -382,7 +409,7 @@ function buildBookingWorkstream(): WorkstreamView {
 
 .workstream-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 11px;
 }
 
@@ -501,50 +528,6 @@ function buildBookingWorkstream(): WorkstreamView {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.child-agent-strip {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
-  gap: 7px;
-  margin-top: 9px;
-  padding: 9px;
-  border: 1px solid #dde7e2;
-  border-radius: 9px;
-  background: #f7faf8;
-}
-
-.child-agent-strip span {
-  min-width: 0;
-}
-
-.child-agent-strip small,
-.child-agent-strip strong,
-.child-agent-strip code {
-  display: block;
-}
-
-.child-agent-strip small {
-  color: #919a96;
-  font-size: 10px;
-}
-
-.child-agent-strip strong,
-.child-agent-strip code {
-  overflow: hidden;
-  margin-top: 4px;
-  color: #3a4a44;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.child-agent-strip p {
-  grid-column: 1 / -1;
-  margin: 2px 0 0;
-  color: #68766f;
-  font-size: 11px;
-  line-height: 1.5;
 }
 
 .uncertain-command {

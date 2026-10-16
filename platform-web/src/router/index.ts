@@ -25,8 +25,8 @@ const routes: RouteRecordRaw[] = [
     name: 'dashboard',
     component: () => import('@/views/DashboardView.vue'),
     meta: {
-      title: '运营驾驶舱',
-      description: '查看跨境发运案件、待办与专业作业运行态势',
+      title: '我的工作',
+      description: '集中处理待办、异常、外部等待与正在推进的发运案件',
     },
   },
   {
@@ -61,7 +61,7 @@ const routes: RouteRecordRaw[] = [
     name: 'shipment-cases',
     component: () => import('@/views/ShipmentCasesView.vue'),
     meta: {
-      title: '发运案件中心',
+      title: '发运案件',
       description: '统一管理发运案件、专业资源、状态流转与审计事件',
     },
   },
@@ -70,8 +70,8 @@ const routes: RouteRecordRaw[] = [
     name: 'agent-center',
     component: () => import('@/views/AgentCenterView.vue'),
     meta: {
-      title: 'Agent 运行中心',
-      description: '查看总编排 Agent、专业能力、人工待办与可审计运行轨迹',
+      title: '自动化运行监控',
+      description: '查看自动化流程、人工介入、异常恢复与完整处理记录',
     },
   },
   {
@@ -99,7 +99,7 @@ const routes: RouteRecordRaw[] = [
     name: 'load-planning-overview',
     component: () => import('@/views/LoadPlanningOverviewView.vue'),
     meta: {
-      title: '智能装载中心',
+      title: '智能装载概览',
       description: '面向箱到托盘的装载规划、3D 复核与审批工作台',
     },
   },
@@ -108,7 +108,7 @@ const routes: RouteRecordRaw[] = [
     name: 'load-planning-tasks',
     component: () => import('@/views/LoadPlanningTasksView.vue'),
     meta: {
-      title: '装载任务',
+      title: '装载作业',
       description: '创建、校验和跟踪装载规划任务',
     },
   },

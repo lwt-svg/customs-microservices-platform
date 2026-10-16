@@ -41,8 +41,8 @@ const scenarioLabels: Record<ShipmentTransportScenario, string> = {
 }
 
 const resourceLabels: Record<ShipmentResourceType, string> = {
-  LOAD_PLANNING_TASK: '智能装载支线',
-  LINK_BOOKING_APPLICATION: 'LINK 订舱支线',
+  LOAD_PLANNING_TASK: '智能装载任务',
+  LINK_BOOKING_APPLICATION: 'LINK 订舱申请',
 }
 
 const eventLabels: Record<string, string> = {
@@ -150,8 +150,8 @@ function resourceScopeLabel(resourceType: ShipmentResourceType): string {
 
 function verificationSourceLabel(value: string): string {
   const labels: Record<string, string> = {
-    LOCAL_LOAD_PLANNING_DATABASE: 'Agent Runtime 本地数据库',
-    LINK_BOOKING_HTTP: 'LINK 只读接口',
+    LOCAL_LOAD_PLANNING_DATABASE: '智能装载业务库',
+    LINK_BOOKING_HTTP: 'LINK 订舱系统',
   }
   return labels[value] ?? value
 }
@@ -215,7 +215,7 @@ watch(
       <span class="workspace-loader"></span>
       <div>
         <strong>正在建立案件工作台</strong>
-        <p>正在通过 Java BFF 读取 Agent Runtime 中的权威案件快照。</p>
+        <p>正在读取本票案件、装载和订舱的最新状态。</p>
       </div>
     </div>
 
@@ -238,14 +238,14 @@ watch(
             <span class="case-kicker">发运案件作业台</span>
             <span class="case-mode-badge">
               <i></i>
-              智能协同已接入
+              发运全流程协同
             </span>
           </div>
           <div class="case-title-row">
             <div>
               <code>{{ detail.caseNumber }}</code>
               <h2>{{ detail.caseName }}</h2>
-              <p>{{ detail.description || '统一处理本票数据准备、智能装载、LINK 订舱和人工确认。' }}</p>
+              <p>{{ detail.description || '在同一票案件中完成资料核验、智能装载、LINK 订舱、承运人确认和结案。' }}</p>
             </div>
             <span class="case-status" :data-status="detail.status">
               <i></i>
@@ -256,7 +256,7 @@ watch(
 
         <div class="case-hero-actions">
           <div>
-            <span>权威快照同步</span>
+            <span>最近同步</span>
             <strong>{{ formatRefreshTime(lastRefreshedAt) }}</strong>
           </div>
           <button type="button" :disabled="loading" @click="loadCase()">
@@ -265,7 +265,7 @@ watch(
           </button>
           <button class="primary" type="button" @click="showManageDrawer = true">
             <UiIcon name="layers" />
-            案件资料与设置
+            查看 / 修改案件资料
           </button>
         </div>
       </header>
@@ -275,19 +275,21 @@ watch(
         <button type="button" @click="loadCase()">重试</button>
       </div>
 
+      <ShipmentAgentRunPanel
+        :case-number="detail.caseNumber"
+        :case-revision="detail.revision"
+        :case-status="detail.status"
+        @case-changed="loadCase()"
+      />
+
       <section class="case-fact-grid" aria-label="案件摘要">
-        <article>
-          <span>案件状态</span>
-          <strong>{{ statusLabels[detail.status] }}</strong>
-          <small>系统会按当前状态控制可执行动作</small>
-        </article>
         <article>
           <span>运输场景</span>
           <strong>{{ scenarioLabels[detail.transportScenario] }}</strong>
-          <small>决定本票需要的专业支线</small>
+          <small>决定本票是否需要装载和订舱</small>
         </article>
         <article>
-          <span>已关联作业</span>
+          <span>专业作业</span>
           <strong>{{ detail.resourceBindings.length }} 项</strong>
           <small>
             {{ loadPlanningBindings.length }} 装载 ·
@@ -297,7 +299,7 @@ watch(
         <article>
           <span>负责组织</span>
           <strong>{{ detail.responsibleOrganizationCode }}</strong>
-          <small>后续由登录身份和组织权限接管</small>
+          <small>本票案件的业务归属</small>
         </article>
         <article>
           <span>最近业务更新</span>
@@ -306,19 +308,12 @@ watch(
         </article>
       </section>
 
-      <ShipmentAgentRunPanel
-        :case-number="detail.caseNumber"
-        :case-revision="detail.revision"
-        :case-status="detail.status"
-        @case-changed="loadCase()"
-      />
-
       <details class="workspace-panel resource-panel compact-detail">
         <summary class="panel-heading">
           <div>
-            <span>案件资料</span>
-            <h3>查看已关联的专业资源</h3>
-            <p>装载与订舱的实时进度已在上方展示；这里保留稳定编号和绑定证据。</p>
+            <span>专业作业凭证</span>
+            <h3>查看装载与订舱的关联记录</h3>
+            <p>日常处理请使用上方入口；需要核对作业编号、来源和关联时间时再展开。</p>
           </div>
           <span class="snapshot-legend">
             <i></i>
@@ -331,7 +326,7 @@ watch(
             <div class="workstream-card-heading">
               <span class="workstream-icon load"><UiIcon name="box" /></span>
               <div>
-                <span>LOAD PLANNING</span>
+                <span>装载作业</span>
                 <h4>{{ resourceLabels.LOAD_PLANNING_TASK }}</h4>
               </div>
               <span class="scope-badge">{{ resourceScopeLabel('LOAD_PLANNING_TASK') }}</span>
@@ -370,7 +365,7 @@ watch(
               <UiIcon name="layers" />
               <div>
                 <strong>尚未关联装载任务</strong>
-                <p>这只表示案件台账没有绑定记录，不代表源系统一定没有任务。</p>
+                <p>请在智能装载工作台准备任务，再回到案件完成关联。</p>
               </div>
             </div>
 
@@ -387,7 +382,7 @@ watch(
             <div class="workstream-card-heading">
               <span class="workstream-icon booking"><UiIcon name="database" /></span>
               <div>
-                <span>LINK BOOKING</span>
+                <span>订舱作业</span>
                 <h4>{{ resourceLabels.LINK_BOOKING_APPLICATION }}</h4>
               </div>
               <span class="scope-badge">
@@ -925,7 +920,7 @@ watch(
 
 .case-fact-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid #e1e7e4;
   border-radius: 15px;
@@ -1673,14 +1668,14 @@ watch(
 
 @media (max-width: 1080px) {
   .case-fact-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .case-fact-grid article:nth-child(3) {
+  .case-fact-grid article:nth-child(even) {
     border-right: 0;
   }
 
-  .case-fact-grid article:nth-child(n + 4) {
+  .case-fact-grid article:nth-child(n + 3) {
     border-top: 1px solid #edf0ef;
   }
 
