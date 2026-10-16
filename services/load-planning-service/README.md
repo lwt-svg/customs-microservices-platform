@@ -188,11 +188,6 @@ ruff format --check .
 pytest -q tests/test_load_planning_workflow.py
 ```
 
-详细代码阅读顺序、调用链、表结构和断点位置见：
-
-```text
-../../docs/23.2-装载任务与主数据后端.md
-../../docs/23.3-PL坐标感知解析RULES_V3.md
-../../docs/23.8-LangGraph工作流编排与持久化恢复.md
-../../docs/23.9-可选LLM方案解读Copilot.md
-```
+个人学习笔记保存在本地并手工同步到语雀，不纳入 Git。服务端代码阅读建议从
+`app/api/`、`app/services/`、`app/workflows/`、`app/repositories/` 和对应 `tests/`
+按调用链逐层进入。

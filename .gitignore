@@ -26,3 +26,8 @@ htmlcov/
 # Runtime files must never be versioned.
 runtime/
 uploads/
+
+# Personal learning notes are maintained locally and copied to Yuque manually.
+# Keep the whole directory out of Git so later chapter notes cannot be uploaded
+# accidentally together with application code.
+/docs/

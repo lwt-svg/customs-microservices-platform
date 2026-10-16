@@ -26,129 +26,41 @@ customs-microservices-platform/
 │   ├── load-planning-service/   Python FastAPI 智能装载任务与算法服务
 │   └── link-carrier-simulator/  Python FastAPI 模拟承运人服务
 ├── scripts/                     core/full 一键启动、状态与停止脚本
-├── docs/                        中文实验笔记
 ├── compose.yaml                 本地 MySQL、Nacos 与可选模拟承运人定义
 └── .env.example                 安全的本地配置示例
 ```
 
-第一次接手项目，先按下面顺序读基础笔记：
+## 产品定位与当前能力
+
+项目定位正在从“关务页面 + 供应链页面”演进为统一的 TradeOps Agent Platform。平台以
+`Shipment Case` 作为跨业务案件主线，让文档、订舱、装载、人工确认、状态事件和后续
+智能编排围绕同一个业务对象协作。
 
 ```text
-docs/00-代码与笔记联合学习指南.md
-docs/00-基础配置.md
-docs/00-本地一键启动与停止.md
-docs/01-项目边界技术选型与本机环境.md
-docs/02-本地Docker-MySQL与Nacos启动.md
-docs/03-Git安全配置与本地数据规则.md
-docs/04-整体架构与服务通信.md
+Vue 企业工作台
+  → Java Platform BFF：身份、权限、菜单、统一 API 和审计入口
+    → Python Agent Runtime：Shipment Case、装载 Agent、未来 RAG 与总编排
+    → LINK Python Service：订舱申请与七步业务
+    → Carrier Simulator：本地异步承运人闭环
+      → MySQL / Nacos
 ```
 
-## 系统定位与学习路线
+当前已经实现：
 
-关务 OS 和供应链 OS 不是两个独立网站，也不需要分别启动两套前端。`platform-web` 是统一
-的沙丘 OS 前端，`platform-bff` 是统一的 Java 平台入口。用户进入平台后，再从门户选择自己
-要处理的业务域：
+- LINK 文档导入、人工复核、七步填单和模拟承运人异步闭环；
+- LangGraph 装载流程、确定性几何计算、三方案比较、3D 复核、审批和不可变正式版本；
+- Shipment Case 案件中心、资源绑定、事件时间线、并发控制和幂等命令台账；
+- Vue → Java BFF → Nacos → Python → MySQL 的真实本机调用链；
+- 一键启动、日志轮转、自动测试和端到端验收脚本。
 
-```text
-沙丘 OS
-├── 关务 OS：PDF 复核、LINK 七步填单、异步承运人闭环
-└── 供应链 OS：装载任务、确定性规划、3D 复核、审批与正式版本
-```
+当前仍未完成：
 
-当前代码已经有组织、用户、角色、权限、菜单的数据模型，也有两个部门入口，但还没有完成
-真实登录、按当前用户过滤门户和菜单、前端路由守卫以及 Java API 的 403 鉴权。因此目前的
-两个入口是业务分区，不是已经验收通过的部门权限隔离。权限概念和验收边界统一放在第 11
-章；后端实现应继续补进第 14 章，前端实现应继续补进第 15 章，不再新增重复的顶层权限章节。
+- 文档理解、字段证据、冲突检查和 RAG；
+- Shipment Case 级总 LangGraph、缺资料暂停和跨工具恢复；
+- 真实登录、案件级 RBAC 和可信用户上下文；
+- Agent 评测、生产可观测、告警、Ops Copilot、Kubernetes 与恢复演练。
 
-建议按下面的主线学习：
-
-```text
-第 10 章：沙丘 OS 平台全局地图
-第 11 章：用户、组织、角色、权限、菜单及当前安全边界
-第 12～13 章：Java BFF 与 Nacos 跨服务基础
-第 14 章：Java 平台数据模型和 RBAC 基础
-第 15 章：Vue 统一门户、菜单和配置页面
-第 20～22 章：关务 OS、PDF、LINK 七步和异步承运人
-第 23 章：供应链智能装载、LangGraph、3D、审批和可选 LLM
-```
-
-第一次学习代码时，先阅读：
-
-```text
-docs/00-代码与笔记联合学习指南.md
-```
-
-进入 LINK 第一阶段代码前，再阅读：
-
-```text
-docs/21章-LINK代码学习导读.md
-```
-
-完成 21.6 后，继续阅读：
-
-```text
-docs/21.6-PDF解析与人工复核创建订舱草稿.md
-docs/21章-LINK第二阶段完成验收.md
-docs/22.0-主线七步填单与异步扩展学习路线.md
-docs/22.6-模拟LINK七步填报与业务确认.md
-docs/00-本地一键启动与停止.md
-```
-
-需要继续学习异步幂等、回调和失败重试时，再阅读：
-
-```text
-docs/22章-模拟承运人代码学习导读.md
-docs/22.1-模拟承运人服务初始化.md
-docs/22.2-模拟承运人门户.md
-docs/22.3-异步提交与状态流转.md
-docs/22.4-回调幂等与失败重试.md
-docs/22.5-模拟LINK完整闭环验收.md
-```
-
-进入供应链 OS 和智能装载第 23 章前，先阅读总导读：
-
-```text
-docs/23章-供应链智能装载代码学习导读.md
-```
-
-总导读会再按当前完成状态引导阅读 `23.0`、`23.1`、`23.2`、`23.2.1`、`23.3`、`23.4`、
-`23.5`、`23.6`、`23.7`、`23.8` 和 `23.9`。推荐继续阅读：
-
-```text
-docs/23.4-状态化装载规划智能体与确定性装托算法.md
-docs/23.5-Three.js三维装载复核与人工审批.md
-docs/23.6-企业级装载智能体闭环与版本化.md
-docs/23.7-正式装载方案锁定与不可变版本.md
-docs/23.8-LangGraph工作流编排与持久化恢复.md
-docs/23.9-可选LLM方案解读Copilot.md
-```
-
-23.4/23.5 已实现“缺约束追问 → 确定性箱子到托盘计算 → 三方案比较 → 3D 复核 → 人工
-批准/驳回”的学习闭环。23.6 又补充了运行版本、失败状态、算法/评分版本、服务端
-`Idempotency-Key`、父子重规划、任务运行列表端点，以及工作台按任务恢复未完成 `runId`
-和从驳回/失败运行重新规划的入口。
-23.7 已完成 `APPROVED` 与 `LOCKED` 分层、三份不可变快照、SHA-256 和 V1/V2 正式版本链。
-23.8 已把现有写入口接入无 LLM 的 LangGraph StateGraph、人工 interrupt 和本地 SQLite
-Checkpointer；Java/Vue URL 与 DTO 保持不变。
-23.9 在装载计算完成后增加可选的方案解读。它支持本地规则、本机 Codex CLI 和 OpenAI
-Responses API 三种 Provider；无论外部模型是否可用，几何计算、硬约束校验、审批和正式
-发布仍由原来的确定性链路负责。
-
-如果你想理解“为什么 LangGraph 只负责编排、为什么 LLM 是可选解释层”，阅读：
-
-```text
-docs/23.8-LangGraph工作流编排与持久化恢复.md
-docs/23.9-可选LLM方案解读Copilot.md
-```
-
-当前已有供应链业务控制塔 KPI、待办队列、运行时间线和版本历史；第 23.10 小节进一步设计
-Prometheus、Grafana、OpenTelemetry、趋势和告警，这些生产可观测能力尚未实现。第 23.11
-小节是装载单元到集装箱规划与 Three.js 复核的下一阶段设计，目前只有构造 benchmark，
-没有集装箱算法、API、数据库和 3D 页面。其他未完成项还包括独立历史运行选择器、真实鉴权
-与四眼审批、作业指导书导出、工程级运输安全规则和现场执行反馈。
-
-这些导读给出了 Vue、Java、Nacos、Python 和 MySQL 的阅读顺序、关键方法、调用链、
-调试断点、自动测试和手工验收，不需要只按文件名零散阅读。
+个人学习笔记保存在本地并手工同步到语雀，不属于项目源码，也不会提交到 Git。
 
 ## 安全边界
 
@@ -427,5 +339,6 @@ LangGraph 的 SQLite Checkpointer 随智能装载 Python 进程自动打开，�
 
 > `.env.local` 被 Git 忽略。不要填入企业账号、Token、地址或真实数据。
 
-七步主线见 `docs/22.6-模拟LINK七步填报与业务确认.md`；异步扩展的完整确认、拒绝和失败
-重试见 `docs/22.5-模拟LINK完整闭环验收.md`。
+LINK 七步前端主线位于 `platform-web/src/components/link-booking/LinkBookingWizard.vue`；
+异步提交、回调幂等和失败重试位于 `services/link-booking-service/app/services/` 与
+`services/link-carrier-simulator/app/services/`。
