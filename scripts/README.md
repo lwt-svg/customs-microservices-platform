@@ -273,6 +273,54 @@ python3 scripts/shipment-case-e2e.py --self-test
 python3 scripts/shipment-case-e2e.py --probe-only --wait-seconds 30
 ```
 
+## Shipment 总 Agent 真实 E2E
+
+这条验收需要 LINK 真正投递到本机模拟承运人，因此先使用 `full`，不能使用只保存
+`PENDING` 投递任务的 `core`：
+
+```bash
+./scripts/run-local.sh full
+```
+
+服务就绪后，在另一个终端执行：
+
+```bash
+python3 scripts/shipment-agent-e2e.py
+```
+
+脚本创建一组全新的 `SYNTHETIC_DEMO` / `DEMO-` 合成数据，并验证：
+
+```text
+Java BFF 创建装载任务、LINK 草稿和 SEA_FCL Shipment Case
+→ 绑定两个资源并启动 Shipment 总 Agent
+→ 人工批准案件激活
+→ 总 Agent 幂等启动装载子 Agent
+→ 批准可行装载方案并发布不可变 LOCKED V1
+→ reconcile 后人工批准 LINK 提交
+→ 总 Agent 进入 WAITING_EXTERNAL，不占线程等待承运人
+→ 本机模拟承运人开始处理并确认
+→ CONFIRMED 回调写回 LINK
+→ 显式 reconcile 后人工批准结案
+→ 复核案件、Agent Center、运行历史、active=null 和完整 Trace
+```
+
+业务资源、Shipment Case、装载子 Agent 与 Shipment 总 Agent 都只通过
+`http://127.0.0.1:8080/api/v1/platform/*` 访问。只有模拟“承运人员工点击处理与确认”
+时，脚本才访问固定的 `http://127.0.0.1:8100/api/v1/portal/*`；它不会调用真实承运人，
+也不会从 `.env.local` 读取或拼接外部地址。
+
+只检查脚本自身的合成数据、本机 URL 边界和幂等重试，不访问网络：
+
+```bash
+python3 scripts/shipment-agent-e2e.py --self-test
+```
+
+只读检查完整链路是否适合运行这条 E2E，不创建测试数据：
+
+```bash
+python3 scripts/shipment-agent-e2e.py --probe-only --wait-seconds 30
+```
+
 ## 脚本自身检查
 
 不启动服务也可以先检查脚本：
@@ -281,7 +329,7 @@ python3 scripts/shipment-case-e2e.py --probe-only --wait-seconds 30
 ./scripts/check-local-scripts.sh
 ```
 
-它会执行 Bash 语法检查、Python 编译检查、两个 E2E 的离线安全重试自检、日志轮转自检、
+它会执行 Bash 语法检查、Python 编译检查、三个 E2E 的离线安全重试自检、日志轮转自检、
 三种智能解读模式/API Key 隔离自检和帮助入口检查。
 日志自检覆盖归档内容、最旧删除与最新保留、空日志也按降低后的上限收敛、无关文件不删除、
 非法保留数回退、current/archive 符号链接与路径逃逸拒绝、复用现有进程不轮转，以及两个

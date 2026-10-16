@@ -39,6 +39,22 @@ import UiIcon from '@/components/UiIcon.vue'
       </div>
     </RouterLink>
 
+    <RouterLink
+      class="agent-governance-entry"
+      to="/tradeops/agents"
+      aria-label="进入 Agent 运行中心"
+    >
+      <span class="agent-governance-icon"><UiIcon name="server" /></span>
+      <div>
+        <span>AGENT RUNTIME &amp; GOVERNANCE</span>
+        <strong>查看真实运行、人工待办、外部等待和 Trace</strong>
+      </div>
+      <span>
+        Agent 运行中心
+        <UiIcon name="arrow" />
+      </span>
+    </RouterLink>
+
     <div class="domain-grid">
       <article class="domain-card customs-domain">
         <div class="domain-card-heading">
@@ -112,6 +128,66 @@ import UiIcon from '@/components/UiIcon.vue'
     border-color 160ms ease,
     box-shadow 160ms ease,
     transform 160ms ease;
+}
+
+.agent-governance-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 14px 17px;
+  border: 1px solid #dce5e1;
+  border-radius: 13px;
+  color: inherit;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(35, 77, 63, 0.04);
+  text-decoration: none;
+}
+
+.agent-governance-entry:hover {
+  border-color: #aac7b9;
+  background: #f8fbf9;
+}
+
+.agent-governance-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  color: #dff1e9;
+  background: #284e40;
+}
+
+.agent-governance-icon .ui-icon {
+  width: 17px;
+}
+
+.agent-governance-entry > div > span {
+  color: #7b8d85;
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+}
+
+.agent-governance-entry > div > strong {
+  display: block;
+  margin-top: 4px;
+  color: #34433d;
+  font-size: 10px;
+}
+
+.agent-governance-entry > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #356a58;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.agent-governance-entry > span:last-child .ui-icon {
+  width: 12px;
 }
 
 .shipment-entry:hover {
@@ -198,6 +274,14 @@ import UiIcon from '@/components/UiIcon.vue'
     grid-column: 2;
     justify-items: start;
   }
+
+  .agent-governance-entry {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .agent-governance-entry > span:last-child {
+    grid-column: 2;
+  }
 }
 
 @media (max-width: 480px) {
@@ -206,6 +290,14 @@ import UiIcon from '@/components/UiIcon.vue'
   }
 
   .shipment-entry-action {
+    grid-column: 1;
+  }
+
+  .agent-governance-entry {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-governance-entry > span:last-child {
     grid-column: 1;
   }
 }

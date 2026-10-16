@@ -8,12 +8,14 @@ import {
   getLoadPlanningAgentRunHistory,
   getLoadPlanningTasks,
   getPlatformHealth,
+  getShipmentAgentRuns,
   getShipmentCases,
   type HealthData,
   type LinkBookingApplication,
   type LinkHealthData,
   type LoadPlanningAgentRun,
   type LoadPlanningTaskSummary,
+  type ShipmentAgentRun,
   type ShipmentCase,
   type ShipmentCaseStatus,
   type ShipmentTransportScenario,
@@ -23,6 +25,7 @@ import UiIcon from '@/components/UiIcon.vue'
 type DataSourceKey =
   | 'platform'
   | 'shipment'
+  | 'shipmentAgent'
   | 'loadPlanning'
   | 'linkApplications'
   | 'linkHealth'
@@ -55,12 +58,14 @@ const showAllWorkItems = ref(false)
 const platformHealth = ref<HealthData | null>(null)
 const linkHealth = ref<LinkHealthData | null>(null)
 const shipmentCases = ref<ShipmentCase[]>([])
+const shipmentAgentRuns = ref<ShipmentAgentRun[]>([])
 const loadPlanningTasks = ref<LoadPlanningTaskSummary[]>([])
 const linkApplications = ref<LinkBookingApplication[]>([])
 const agentTaskSnapshots = ref<AgentTaskSnapshot[]>([])
 const sourceStates = ref<Record<DataSourceKey, DataSourceState>>({
   platform: 'idle',
   shipment: 'idle',
+  shipmentAgent: 'idle',
   loadPlanning: 'idle',
   linkApplications: 'idle',
   linkHealth: 'idle',
@@ -104,6 +109,20 @@ const unboundCases = computed(() =>
   openCases.value.filter((shipmentCase) => shipmentCase.resourceBindings.length === 0),
 )
 
+const shipmentAgentAttentionRuns = computed(() =>
+  shipmentAgentRuns.value.filter((run) =>
+    ['WAITING_HUMAN', 'WAITING_RESOURCE', 'FAILED'].includes(run.status),
+  ),
+)
+
+const shipmentAgentHumanCount = computed(
+  () => shipmentAgentRuns.value.filter((run) => run.status === 'WAITING_HUMAN').length,
+)
+
+const shipmentAgentExternalCount = computed(
+  () => shipmentAgentRuns.value.filter((run) => run.status === 'WAITING_EXTERNAL').length,
+)
+
 const linkDraftCount = computed(
   () => linkApplications.value.filter((application) => application.status === 'DRAFT').length,
 )
@@ -131,6 +150,7 @@ const agentUnavailableCount = computed(
 const visibleAttentionCount = computed(
   () =>
     unboundCases.value.length +
+    shipmentAgentAttentionRuns.value.length +
     linkDraftCount.value +
     linkRejectedCount.value +
     agentAttentionSnapshots.value.length,
@@ -145,6 +165,7 @@ const visibleAttentionCount = computed(
 const hasAttentionCoverageGap = computed(
   () =>
     sourceStates.value.shipment === 'error' ||
+    sourceStates.value.shipmentAgent === 'error' ||
     sourceStates.value.loadPlanning === 'error' ||
     sourceStates.value.linkApplications === 'error' ||
     agentUnavailableCount.value > 0,
@@ -185,6 +206,45 @@ const workItems = computed<WorkItem[]>(() => {
         route: shipmentCasePath(shipmentCase.caseNumber),
         updatedAt: shipmentCase.updatedAt,
         tone: 'info',
+      })
+    }
+  }
+
+  for (const run of shipmentAgentAttentionRuns.value) {
+    if (run.status === 'WAITING_HUMAN') {
+      items.push({
+        id: `shipment-agent-human-${run.runId}`,
+        eyebrow: 'Shipment Agent · 等待人工决策',
+        title: run.pendingInterrupt?.title ?? run.caseNumber,
+        detail:
+          run.pendingInterrupt?.description ??
+          `${run.caseNumber} 已在 ${run.currentStage} 节点安全暂停。`,
+        action: '处理 Agent 待办',
+        route: shipmentCasePath(run.caseNumber),
+        updatedAt: run.updatedAt,
+        tone: 'warning',
+      })
+    } else if (run.status === 'WAITING_RESOURCE') {
+      items.push({
+        id: `shipment-agent-resource-${run.runId}`,
+        eyebrow: 'Shipment Agent · 等待专业作业',
+        title: run.caseNumber,
+        detail: `${run.currentStage} 需要先在装载或订舱工作台完成业务处理。`,
+        action: '打开案件并处理',
+        route: shipmentCasePath(run.caseNumber),
+        updatedAt: run.updatedAt,
+        tone: 'info',
+      })
+    } else if (run.status === 'FAILED') {
+      items.push({
+        id: `shipment-agent-failed-${run.runId}`,
+        eyebrow: 'Shipment Agent · 编排失败',
+        title: run.caseNumber,
+        detail: run.failureMessage || `${run.currentStage} 节点失败，请查看运行 Trace。`,
+        action: '查看失败轨迹',
+        route: '/tradeops/agents',
+        updatedAt: run.updatedAt,
+        tone: 'critical',
       })
     }
   }
@@ -321,10 +381,18 @@ async function loadDashboard(): Promise<void> {
   loading.value = true
   failures.value = []
 
-  const [platformResult, shipmentResult, taskResult, linkApplicationResult, linkHealthResult] =
+  const [
+    platformResult,
+    shipmentResult,
+    shipmentAgentResult,
+    taskResult,
+    linkApplicationResult,
+    linkHealthResult,
+  ] =
     await Promise.allSettled([
       getPlatformHealth(),
       getShipmentCases(),
+      getShipmentAgentRuns(),
       getLoadPlanningTasks(),
       getLinkBookingApplications(),
       getLinkBookingHealth(),
@@ -346,6 +414,15 @@ async function loadDashboard(): Promise<void> {
     shipmentCases.value = []
     sourceStates.value.shipment = 'error'
     failures.value.push('发运案件数据读取失败')
+  }
+
+  if (shipmentAgentResult.status === 'fulfilled') {
+    shipmentAgentRuns.value = shipmentAgentResult.value
+    sourceStates.value.shipmentAgent = 'ready'
+  } else {
+    shipmentAgentRuns.value = []
+    sourceStates.value.shipmentAgent = 'error'
+    failures.value.push('Shipment Agent 运行数据读取失败')
   }
 
   if (taskResult.status === 'fulfilled') {
@@ -495,10 +572,10 @@ onMounted(loadDashboard)
           <button
             class="hero-secondary"
             type="button"
-            @click="router.push('/supply-chain/load-planning/tasks')"
+            @click="router.push('/tradeops/agents')"
           >
-            <UiIcon name="layers" />
-            打开装载 Agent
+            <UiIcon name="server" />
+            打开 Agent 运行中心
           </button>
         </div>
       </div>
@@ -568,6 +645,32 @@ onMounted(loadDashboard)
           <small>资源待关联</small>
           <strong>{{ loading || sourceStates.shipment !== 'ready' ? '—' : unboundCases.length }}</strong>
           <p>{{ sourceStates.shipment === 'ready' ? '案件尚未绑定专业作业' : '案件来源尚未确认' }}</p>
+        </div>
+        <UiIcon class="metric-arrow" name="arrow" />
+      </button>
+
+      <button
+        class="operation-metric orchestrator"
+        type="button"
+        @click="router.push('/tradeops/agents')"
+      >
+        <span class="metric-icon"><UiIcon name="server" /></span>
+        <div class="metric-copy">
+          <small>总 Agent 待处理</small>
+          <strong>
+            {{
+              loading || sourceStates.shipmentAgent !== 'ready'
+                ? '—'
+                : shipmentAgentAttentionRuns.length
+            }}
+          </strong>
+          <p>
+            {{
+              sourceStates.shipmentAgent === 'ready'
+                ? `人工 ${shipmentAgentHumanCount} · 外部等待 ${shipmentAgentExternalCount}`
+                : '总编排运行来源尚未确认'
+            }}
+          </p>
         </div>
         <UiIcon class="metric-arrow" name="arrow" />
       </button>
@@ -697,6 +800,22 @@ onMounted(loadDashboard)
         </div>
 
         <div class="professional-list">
+          <button type="button" @click="router.push('/tradeops/agents')">
+            <span class="professional-icon agent"><UiIcon name="server" /></span>
+            <span>
+              <small>AGENT CONTROL PLANE</small>
+              <strong>Agent 运行中心</strong>
+              <p>
+                {{
+                  sourceStates.shipmentAgent === 'ready'
+                    ? `${shipmentAgentRuns.length} 条总编排运行 · ${shipmentAgentHumanCount} 项人工待办`
+                    : '总 Agent 运行数据暂未确认'
+                }}
+              </p>
+            </span>
+            <UiIcon name="arrow" />
+          </button>
+
           <button type="button" @click="router.push('/tradeops/shipment-cases')">
             <span class="professional-icon shipment"><UiIcon name="truck" /></span>
             <span>
@@ -904,6 +1023,23 @@ onMounted(loadDashboard)
         </div>
 
         <div>
+          <span class="system-icon"><UiIcon name="server" /></span>
+          <span>
+            <small>Shipment Agent Runtime</small>
+            <strong>
+              {{
+                sourceStates.shipmentAgent === 'ready'
+                  ? `${shipmentAgentRuns.length} 条运行快照`
+                  : '运行数量未知'
+              }}
+            </strong>
+          </span>
+          <i :class="{ online: sourceStates.shipmentAgent === 'ready' }">
+            {{ serviceStateLabel(sourceStates.shipmentAgent) }}
+          </i>
+        </div>
+
+        <div>
           <span class="system-icon"><UiIcon name="layers" /></span>
           <span>
             <small>Load Planning 数据通道</small>
@@ -946,6 +1082,10 @@ onMounted(loadDashboard)
   display: grid;
   gap: 18px;
   color: #17211d;
+}
+
+.metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
 }
 
 button {
@@ -1254,6 +1394,10 @@ button {
   background: #677eae;
 }
 
+.operation-metric.orchestrator::before {
+  background: #2e8068;
+}
+
 .operation-metric.booking::before {
   background: #7d6ba0;
 }
@@ -1282,6 +1426,11 @@ button {
 .operation-metric.agent .metric-icon {
   color: #536b9e;
   background: #edf1fa;
+}
+
+.operation-metric.orchestrator .metric-icon {
+  color: #276d59;
+  background: #e6f3ee;
 }
 
 .operation-metric.booking .metric-icon {
@@ -1623,6 +1772,11 @@ button {
   background: #e8f3ee;
 }
 
+.professional-icon.agent {
+  color: #1f6e57;
+  background: #e1f1eb;
+}
+
 .professional-icon.load {
   color: #546b9b;
   background: #ecf0f9;
@@ -1929,7 +2083,7 @@ button {
 
 .system-status-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 9px;
 }
 

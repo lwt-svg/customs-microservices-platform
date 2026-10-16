@@ -66,6 +66,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/tradeops/agents',
+    name: 'agent-center',
+    component: () => import('@/views/AgentCenterView.vue'),
+    meta: {
+      title: 'Agent 运行中心',
+      description: '查看总编排 Agent、专业能力、人工待办与可审计运行轨迹',
+    },
+  },
+  {
     path: '/tradeops/shipment-cases/:caseNumber',
     name: 'shipment-case-workspace',
     component: () => import('@/views/ShipmentCaseWorkspaceView.vue'),

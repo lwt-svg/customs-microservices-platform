@@ -13,6 +13,7 @@ from app.api.agent_runs import router as agent_runs_router
 from app.api.load_planning_tasks import router as load_planning_tasks_router
 from app.api.packing_list_imports import router as packing_list_imports_router
 from app.api.plan_versions import router as plan_versions_router
+from app.api.shipment_agent_runs import router as shipment_agent_runs_router
 from app.api.shipment_cases import router as shipment_cases_router
 from app.core.config import settings
 from app.integrations.nacos_registry import NacosServiceRegistry
@@ -84,6 +85,7 @@ app.include_router(packing_list_imports_router, prefix=settings.api_prefix)
 app.include_router(agent_runs_router, prefix=settings.api_prefix)
 app.include_router(plan_versions_router, prefix=settings.api_prefix)
 app.include_router(shipment_cases_router, prefix=settings.api_prefix)
+app.include_router(shipment_agent_runs_router, prefix=settings.api_prefix)
 
 
 @app.get("/health/live", tags=["health"])

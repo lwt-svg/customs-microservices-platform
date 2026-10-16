@@ -65,6 +65,12 @@ const fallbackGroups: NavigationGroup[] = [
         icon: 'truck',
         enabled: true,
       },
+      {
+        label: 'Agent 运行中心',
+        path: '/tradeops/agents',
+        icon: 'server',
+        enabled: true,
+      },
     ],
   },
   {

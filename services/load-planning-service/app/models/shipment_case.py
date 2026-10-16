@@ -12,6 +12,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
@@ -28,6 +29,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.shipment_data_readiness import ShipmentCaseDataReadiness
 
 
 class ShipmentCaseStatus(StrEnum):
@@ -154,6 +158,13 @@ class ShipmentCase(Base):
         # 新事件仍会通过默认的 save-update cascade 随案件一起持久化。
         lazy="selectin",
         order_by="ShipmentCaseEvent.sequence",
+    )
+    data_readiness: Mapped["ShipmentCaseDataReadiness | None"] = relationship(
+        back_populates="shipment_case",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        single_parent=True,
+        uselist=False,
     )
 
 

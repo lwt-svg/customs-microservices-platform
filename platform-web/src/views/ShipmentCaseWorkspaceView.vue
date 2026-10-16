@@ -11,26 +11,9 @@ import {
   type ShipmentResourceType,
   type ShipmentTransportScenario,
 } from '@/api/platform'
+import ShipmentAgentRunPanel from '@/components/shipment-agent/ShipmentAgentRunPanel.vue'
 import ShipmentCaseDetailDrawer from '@/components/shipment-case/ShipmentCaseDetailDrawer.vue'
 import UiIcon from '@/components/UiIcon.vue'
-
-type StageState = 'done' | 'current' | 'attention' | 'pending' | 'skipped'
-
-interface WorkspaceStage {
-  number: string
-  title: string
-  description: string
-  state: StageState
-  stateLabel: string
-}
-
-interface WorkspaceGuidance {
-  tone: 'neutral' | 'attention' | 'success'
-  eyebrow: string
-  title: string
-  description: string
-  actions: string[]
-}
 
 const route = useRoute()
 const detail = ref<ShipmentCase | null>(null)
@@ -79,194 +62,6 @@ const loadPlanningBindings = computed(() =>
 const linkBookingBindings = computed(() =>
   bindingsOfType('LINK_BOOKING_APPLICATION'),
 )
-
-const completedStageCount = computed(
-  () => stages.value.filter((stage) => stage.state === 'done').length,
-)
-
-/**
- * 这里只把后端已经记录的案件状态和资源关系整理成可读阶段。
- *
- * 它不是 Shipment Agent 的运行图，也不会把“资源已绑定”推断成“专业任务已完成”。
- * 后续接入总 LangGraph 后，阶段状态应改为读取真实节点和 checkpoint。
- */
-const stages = computed<WorkspaceStage[]>(() => {
-  const shipmentCase = detail.value
-  if (!shipmentCase) return []
-
-  const hasBindings = shipmentCase.resourceBindings.length > 0
-  const terminal = ['COMPLETED', 'CANCELLED'].includes(shipmentCase.status)
-
-  return [
-    {
-      number: '01',
-      title: '建立案件',
-      description: `案件主数据已登记，当前服务端修订号为 R${shipmentCase.revision}。`,
-      state: 'done',
-      stateLabel: '已登记',
-    },
-    {
-      number: '02',
-      title: '关联专业资源',
-      description: hasBindings
-        ? `已关联 ${shipmentCase.resourceBindings.length} 项资源；是否齐全仍由业务人员确认。`
-        : terminal
-          ? '终态前没有登记专业资源，本阶段仅保留为空的历史事实。'
-          : '尚未关联装载任务或 LINK 订舱申请。',
-      state: hasBindings ? 'done' : terminal ? 'skipped' : 'attention',
-      stateLabel: hasBindings ? '已有记录' : terminal ? '未发生' : '待处理',
-    },
-    {
-      number: '03',
-      title: '推进专业作业',
-      description:
-        shipmentCase.status === 'ACTIVE'
-          ? '案件处于进行中；请进入专业工作台核验源系统的实时状态。'
-          : shipmentCase.status === 'COMPLETED'
-            ? '案件已由业务人员标记完成，不代表本页独立验证了各专业结果。'
-            : shipmentCase.status === 'CANCELLED'
-              ? '案件已取消，不再推进后续专业作业。'
-              : '案件仍为草稿，尚未进入人工推进阶段。',
-      state:
-        shipmentCase.status === 'ACTIVE'
-          ? 'current'
-          : shipmentCase.status === 'COMPLETED'
-            ? 'done'
-            : shipmentCase.status === 'CANCELLED'
-              ? 'skipped'
-              : 'pending',
-      stateLabel:
-        shipmentCase.status === 'ACTIVE'
-          ? '人工推进中'
-          : shipmentCase.status === 'COMPLETED'
-            ? '人工确认完成'
-            : shipmentCase.status === 'CANCELLED'
-              ? '已终止'
-              : '尚未开始',
-    },
-    {
-      number: '04',
-      title: '结案与审计',
-      description:
-        shipmentCase.status === 'COMPLETED'
-          ? '案件已完成，页面保留当前快照和不可变事件时间线。'
-          : shipmentCase.status === 'CANCELLED'
-            ? '案件已取消，页面保留终止原因和历史审计记录。'
-            : '等待业务人员在专业作业结束后确认终态。',
-      state: terminal ? 'done' : 'pending',
-      stateLabel:
-        shipmentCase.status === 'COMPLETED'
-          ? '已归档'
-          : shipmentCase.status === 'CANCELLED'
-            ? '终止归档'
-            : '等待结案',
-    },
-  ]
-})
-
-const guidance = computed<WorkspaceGuidance>(() => {
-  const shipmentCase = detail.value
-  if (!shipmentCase) {
-    return {
-      tone: 'neutral',
-      eyebrow: 'CURRENT GUIDANCE',
-      title: '正在读取案件',
-      description: '等待权威案件快照返回。',
-      actions: [],
-    }
-  }
-
-  if (shipmentCase.status === 'COMPLETED') {
-    return {
-      tone: 'success',
-      eyebrow: 'CURRENT GUIDANCE',
-      title: '案件已完成，当前以审计复核为主',
-      description:
-        '总 Agent 尚未接入，因此这里不会声称系统自动验收了装载与订舱结果。',
-      actions: ['核对专业资源的绑定时快照', '按时间线复核关键人工操作'],
-    }
-  }
-
-  if (shipmentCase.status === 'CANCELLED') {
-    return {
-      tone: 'neutral',
-      eyebrow: 'CURRENT GUIDANCE',
-      title: '案件已取消，不再生成推进建议',
-      description: '如需继续同一业务，应由业务人员建立新案件，而不是改写当前终态记录。',
-      actions: ['查看取消事件与原因', '保留原案件作为审计依据'],
-    }
-  }
-
-  if (shipmentCase.transportScenario === 'UNDECIDED') {
-    return {
-      tone: 'attention',
-      eyebrow: 'MANUAL DECISION REQUIRED',
-      title: '运输场景仍待确认，当前版本不能直接修改',
-      description:
-        '当前尚未提供案件场景变更命令，也没有跨域自动追问或回退；页面不会给出一个实际不存在的“更新场景”入口。',
-      actions:
-        shipmentCase.status === 'DRAFT'
-          ? [
-              '保持当前案件为草稿，在线下确认海运、空运、快递或单能力场景',
-              '场景确认后新建场景正确的案件，并取消当前草稿，避免错误激活',
-            ]
-          : [
-              '暂停继续绑定专业资源，先核对当前案件是否被错误激活',
-              '新建场景正确的案件，并在案件操作中取消当前案件以保留审计记录',
-            ],
-    }
-  }
-
-  const missingLoadPlanning =
-    shipmentCase.transportScenario === 'LOAD_PLANNING_ONLY' &&
-    loadPlanningBindings.value.length === 0
-  const missingBooking =
-    shipmentCase.transportScenario === 'BOOKING_ONLY' &&
-    linkBookingBindings.value.length === 0
-
-  if (missingLoadPlanning || missingBooking) {
-    const missingName = missingLoadPlanning ? '装载任务' : 'LINK 订舱申请'
-    return {
-      tone: 'attention',
-      eyebrow: 'RESOURCE MISSING',
-      title: `当前单能力场景尚未关联${missingName}`,
-      description:
-        '这是根据案件场景和绑定记录得出的确定性提醒，不是 Agent 自主规划结果。',
-      actions: [`进入对应专业工作台准备${missingName}`, '返回案件操作抽屉验证并关联资源编号'],
-    }
-  }
-
-  if (shipmentCase.status === 'DRAFT') {
-    return {
-      tone: 'neutral',
-      eyebrow: 'READY FOR HUMAN REVIEW',
-      title: '确认案件范围后，可由业务人员激活',
-      description:
-        '当前版本只提供人工案件编排。激活前请确认运输场景、资源范围和案件说明。',
-      actions: ['确认已关联资源是否覆盖本票范围', '在案件操作中填写原因并激活'],
-    }
-  }
-
-  if (shipmentCase.resourceBindings.length === 0) {
-    return {
-      tone: 'attention',
-      eyebrow: 'RESOURCE VISIBILITY',
-      title: '案件已进行中，但尚无专业资源记录',
-      description:
-        '本页无法据此判断实际业务是否已经开始，请先核对专业系统，再决定是否补充关联。',
-      actions: ['核对装载与订舱系统中是否已有任务', '有稳定编号后再绑定，避免创建重复资源'],
-    }
-  }
-
-  return {
-    tone: 'neutral',
-    eyebrow: 'HUMAN-ORCHESTRATED CASE',
-    title: '进入专业工作台核验实时进度',
-    description:
-      '本页保存的是绑定时快照，不会把它冒充为源系统实时状态。完成专业作业后再人工结案。',
-    actions: ['分别打开装载和订舱支线核验实时结果', '处理完业务异常后，在案件操作中确认结案'],
-  }
-})
 
 function routeCaseNumber(value: unknown): string {
   if (Array.isArray(value)) return String(value[0] ?? '').trim()
@@ -440,17 +235,17 @@ watch(
       <header class="case-hero">
         <div class="case-hero-main">
           <div class="case-kicker-row">
-            <span class="case-kicker">SHIPMENT CASE WORKSPACE</span>
+            <span class="case-kicker">发运案件作业台</span>
             <span class="case-mode-badge">
               <i></i>
-              人工案件编排
+              智能协同已接入
             </span>
           </div>
           <div class="case-title-row">
             <div>
               <code>{{ detail.caseNumber }}</code>
               <h2>{{ detail.caseName }}</h2>
-              <p>{{ detail.description || '暂无业务说明；可在后续案件版本中补充业务背景。' }}</p>
+              <p>{{ detail.description || '统一处理本票数据准备、智能装载、LINK 订舱和人工确认。' }}</p>
             </div>
             <span class="case-status" :data-status="detail.status">
               <i></i>
@@ -470,7 +265,7 @@ watch(
           </button>
           <button class="primary" type="button" @click="showManageDrawer = true">
             <UiIcon name="layers" />
-            案件操作
+            案件资料与设置
           </button>
         </div>
       </header>
@@ -480,122 +275,56 @@ watch(
         <button type="button" @click="loadCase()">重试</button>
       </div>
 
-      <section class="agent-boundary-banner">
-        <span class="agent-boundary-icon"><UiIcon name="shield" /></span>
-        <div>
-          <span>ORCHESTRATION MODE</span>
-          <strong>当前编排模式：人工确认</strong>
-          <p>
-            当前阶段由案件状态、资源绑定和审计事件组成，建议为确定性规则提示；
-            跨域自动规划、工具调用与异常回退尚未启用。
-          </p>
-        </div>
-        <span class="agent-boundary-tag">关键步骤人工复核</span>
-      </section>
-
       <section class="case-fact-grid" aria-label="案件摘要">
+        <article>
+          <span>案件状态</span>
+          <strong>{{ statusLabels[detail.status] }}</strong>
+          <small>系统会按当前状态控制可执行动作</small>
+        </article>
         <article>
           <span>运输场景</span>
           <strong>{{ scenarioLabels[detail.transportScenario] }}</strong>
-          <small>{{ detail.transportScenario }}</small>
+          <small>决定本票需要的专业支线</small>
         </article>
         <article>
-          <span>负责组织</span>
-          <strong>{{ detail.responsibleOrganizationCode }}</strong>
-          <small>真实组织权限尚待 RBAC 接入</small>
-        </article>
-        <article>
-          <span>案件版本</span>
-          <strong>R{{ detail.revision }}</strong>
-          <small>写命令使用乐观锁校验</small>
-        </article>
-        <article>
-          <span>专业资源</span>
-          <strong>{{ detail.resourceBindings.length }}</strong>
+          <span>已关联作业</span>
+          <strong>{{ detail.resourceBindings.length }} 项</strong>
           <small>
             {{ loadPlanningBindings.length }} 装载 ·
             {{ linkBookingBindings.length }} 订舱
           </small>
         </article>
         <article>
-          <span>审计事件</span>
-          <strong>{{ detail.events.length }}</strong>
-          <small>只追加，不覆盖历史事实</small>
+          <span>负责组织</span>
+          <strong>{{ detail.responsibleOrganizationCode }}</strong>
+          <small>后续由登录身份和组织权限接管</small>
+        </article>
+        <article>
+          <span>最近业务更新</span>
+          <strong>{{ formatDateTime(detail.updatedAt) }}</strong>
+          <small>{{ detail.events.length }} 条历史记录可追溯</small>
         </article>
       </section>
 
-      <div class="workspace-grid">
-        <section class="workspace-panel stage-panel">
-          <div class="panel-heading">
-            <div>
-              <span>CASE STAGES</span>
-              <h3>协同阶段</h3>
-              <p>根据案件状态和绑定记录推导，不代表 Agent 节点执行进度。</p>
-            </div>
-            <div class="stage-count">
-              <strong>{{ completedStageCount }}</strong>
-              <span>/ {{ stages.length }} 已形成记录</span>
-            </div>
-          </div>
+      <ShipmentAgentRunPanel
+        :case-number="detail.caseNumber"
+        :case-revision="detail.revision"
+        :case-status="detail.status"
+        @case-changed="loadCase()"
+      />
 
-          <ol class="stage-track">
-            <li
-              v-for="stage in stages"
-              :key="stage.number"
-              :data-state="stage.state"
-            >
-              <div class="stage-marker">
-                <UiIcon v-if="stage.state === 'done'" name="check" />
-                <span v-else>{{ stage.number }}</span>
-              </div>
-              <div class="stage-content">
-                <div>
-                  <strong>{{ stage.title }}</strong>
-                  <span>{{ stage.stateLabel }}</span>
-                </div>
-                <p>{{ stage.description }}</p>
-              </div>
-            </li>
-          </ol>
-        </section>
-
-        <aside class="workspace-panel guidance-panel" :data-tone="guidance.tone">
-          <div class="guidance-heading">
-            <span class="guidance-icon">
-              <UiIcon :name="guidance.tone === 'success' ? 'check' : 'alert'" />
-            </span>
-            <div>
-              <span>{{ guidance.eyebrow }}</span>
-              <h3>当前建议与阻塞</h3>
-            </div>
-          </div>
-          <strong class="guidance-title">{{ guidance.title }}</strong>
-          <p class="guidance-description">{{ guidance.description }}</p>
-          <ol v-if="guidance.actions.length" class="guidance-actions">
-            <li v-for="(action, index) in guidance.actions" :key="action">
-              <span>{{ index + 1 }}</span>
-              {{ action }}
-            </li>
-          </ol>
-          <button class="guidance-button" type="button" @click="showManageDrawer = true">
-            打开案件操作
-            <UiIcon name="arrow" />
-          </button>
-        </aside>
-      </div>
-
-      <section class="workspace-panel resource-panel">
-        <div class="panel-heading">
+      <details class="workspace-panel resource-panel compact-detail">
+        <summary class="panel-heading">
           <div>
-            <span>PROFESSIONAL WORKSTREAMS</span>
-            <h3>专业资源支线</h3>
-            <p>案件保存稳定编号与绑定时快照；实时业务状态仍以各专业工作台为准。</p>
+            <span>案件资料</span>
+            <h3>查看已关联的专业资源</h3>
+            <p>装载与订舱的实时进度已在上方展示；这里保留稳定编号和绑定证据。</p>
           </div>
           <span class="snapshot-legend">
             <i></i>
-            绑定时快照，不是实时状态
+            {{ detail.resourceBindings.length }} 项关联
           </span>
-        </div>
+        </summary>
 
         <div class="workstream-grid">
           <article class="workstream-card">
@@ -712,20 +441,20 @@ watch(
             </RouterLink>
           </article>
         </div>
-      </section>
+      </details>
 
-      <section class="workspace-panel timeline-panel">
-        <div class="panel-heading">
+      <details class="workspace-panel timeline-panel compact-detail">
+        <summary class="panel-heading">
           <div>
-            <span>AUDIT TRAIL</span>
-            <h3>案件事件时间线</h3>
-            <p>每条事件都是服务端已经持久化的历史事实，按最新事件优先显示。</p>
+            <span>业务记录</span>
+            <h3>案件历史与审计时间线</h3>
+            <p>默认收起；需要追溯资源绑定、状态变化和操作人员时再展开。</p>
           </div>
           <div class="timeline-range">
             <span>创建 {{ formatDateTime(detail.createdAt) }}</span>
             <strong>更新 {{ formatDateTime(detail.updatedAt) }}</strong>
           </div>
-        </div>
+        </summary>
 
         <ol v-if="newestEvents.length" class="event-timeline">
           <li v-for="event in newestEvents" :key="event.id">
@@ -761,7 +490,7 @@ watch(
           <UiIcon name="clock" />
           <p>当前快照没有可展示的审计事件。</p>
         </div>
-      </section>
+      </details>
 
       <ShipmentCaseDetailDrawer
         v-model="showManageDrawer"
@@ -775,7 +504,7 @@ watch(
 <style scoped>
 .case-workspace {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   color: #17211e;
 }
 
@@ -784,7 +513,7 @@ watch(
   align-items: center;
   gap: 10px;
   color: #89928f;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .workspace-breadcrumb a {
@@ -810,7 +539,7 @@ watch(
   max-width: 340px;
   color: #4f5a56;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -890,12 +619,12 @@ watch(
 .case-hero {
   position: relative;
   display: flex;
-  min-height: 205px;
-  align-items: stretch;
+  min-height: 150px;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   overflow: hidden;
-  padding: 28px 30px;
+  padding: 22px 24px;
   border: 1px solid #203a33;
   border-radius: 20px;
   color: #f5faf8;
@@ -951,7 +680,7 @@ watch(
 
 .case-kicker {
   color: #8fb8aa;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 750;
   letter-spacing: 0.16em;
 }
@@ -965,7 +694,7 @@ watch(
   border-radius: 999px;
   color: #d6e9e1;
   background: rgba(255, 255, 255, 0.06);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -981,29 +710,29 @@ watch(
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  margin-top: 24px;
+  margin-top: 16px;
 }
 
 .case-title-row code {
   color: #9fc4b6;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.05em;
 }
 
 .case-title-row h2 {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: #fff;
-  font-size: clamp(24px, 3vw, 34px);
+  font-size: clamp(22px, 2.4vw, 29px);
   font-weight: 660;
   letter-spacing: -0.035em;
 }
 
 .case-title-row p {
   max-width: 660px;
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   color: #b6c8c1;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.75;
 }
 
@@ -1018,7 +747,7 @@ watch(
   border-radius: 999px;
   color: #dcebe5;
   background: rgba(255, 255, 255, 0.07);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -1067,14 +796,14 @@ watch(
 
 .case-hero-actions > div span {
   color: #89a69b;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .case-hero-actions > div strong {
   margin-top: 5px;
   color: #d6e5df;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .case-hero-actions button {
@@ -1088,7 +817,7 @@ watch(
   color: #dceae5;
   background: rgba(255, 255, 255, 0.06);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -1160,7 +889,7 @@ watch(
 .event-card-heading > div > span {
   display: block;
   color: #8a9692;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 750;
   letter-spacing: 0.14em;
 }
@@ -1179,7 +908,7 @@ watch(
 .agent-boundary-banner p {
   margin-top: 4px;
   color: #65736e;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -1189,7 +918,7 @@ watch(
   border-radius: 999px;
   color: #65736e;
   background: rgba(255, 255, 255, 0.76);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1222,14 +951,14 @@ watch(
 
 .case-fact-grid span {
   color: #8a9491;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .case-fact-grid strong {
   overflow: hidden;
   margin-top: 7px;
   color: #24312d;
-  font-size: 13px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1238,7 +967,7 @@ watch(
   overflow: hidden;
   margin-top: 5px;
   color: #9aa39f;
-  font-size: 8px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1271,11 +1000,26 @@ watch(
   gap: 18px;
 }
 
+.compact-detail > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.compact-detail > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compact-detail[open] > summary {
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e6ebe9;
+}
+
 .panel-heading h3,
 .guidance-heading h3 {
   margin: 5px 0 0;
   color: #23302c;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 680;
   letter-spacing: -0.02em;
 }
@@ -1283,7 +1027,7 @@ watch(
 .panel-heading p {
   margin: 7px 0 0;
   color: #7d8884;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -1307,7 +1051,7 @@ watch(
 .stage-count span {
   margin-top: 5px;
   color: #9aa29f;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .stage-track {
@@ -1356,7 +1100,7 @@ watch(
   color: #8b9692;
   background: #f7f9f8;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -1402,7 +1146,7 @@ watch(
 
 .stage-content strong {
   color: #34413d;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .stage-content span {
@@ -1410,7 +1154,7 @@ watch(
   border-radius: 999px;
   color: #77817e;
   background: #f2f4f3;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1428,7 +1172,7 @@ watch(
 .stage-content p {
   margin: 6px 0 0;
   color: #7d8783;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -1498,7 +1242,7 @@ watch(
   z-index: 1;
   margin: 9px 0 0;
   color: #717d78;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
 }
 
@@ -1517,7 +1261,7 @@ watch(
   align-items: flex-start;
   gap: 8px;
   color: #4e5c57;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -1530,7 +1274,7 @@ watch(
   border-radius: 6px;
   color: #376a58;
   background: #e6f1ed;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 750;
 }
 
@@ -1549,7 +1293,7 @@ watch(
   color: #315f50;
   background: #fff;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -1568,7 +1312,7 @@ watch(
   border-radius: 999px;
   color: #7a8480;
   background: #fafbfb;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -1625,7 +1369,7 @@ watch(
 .workstream-card-heading h4 {
   margin: 4px 0 0;
   color: #303d38;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .scope-badge {
@@ -1633,7 +1377,7 @@ watch(
   border-radius: 999px;
   color: #6e7975;
   background: #edf1ef;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1660,14 +1404,14 @@ watch(
 
 .binding-identity span {
   color: #8c9692;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .binding-identity strong {
   overflow: hidden;
   color: #34433e;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1691,13 +1435,13 @@ watch(
 
 .binding-item dt {
   color: #a0a8a5;
-  font-size: 7px;
+  font-size: 11px;
 }
 
 .binding-item dd {
   margin-top: 4px;
   color: #66716d;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .binding-direct-link {
@@ -1706,7 +1450,7 @@ watch(
   gap: 5px;
   margin-top: 11px;
   color: #356a58;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
   text-decoration: none;
 }
@@ -1747,12 +1491,12 @@ watch(
 
 .binding-empty strong {
   color: #5e6a66;
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .binding-empty p {
   margin-top: 5px;
-  font-size: 8px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -1764,7 +1508,7 @@ watch(
   padding: 11px 2px 0;
   border-top: 1px solid #e6ebe9;
   color: #376958;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
   text-decoration: none;
 }
@@ -1786,7 +1530,7 @@ watch(
 .timeline-range strong {
   display: block;
   color: #969f9c;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 500;
 }
 
@@ -1819,7 +1563,7 @@ watch(
   color: #557066;
   background: #f2f6f4;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 750;
 }
 
@@ -1843,20 +1587,20 @@ watch(
   display: block;
   margin-top: 4px;
   color: #35423e;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .event-card-heading time {
   flex: 0 0 auto;
   color: #909995;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .event-card > p {
   margin: 10px 0 0;
   color: #68746f;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
@@ -1872,7 +1616,7 @@ watch(
   border-radius: 7px;
   color: #5d6d67;
   background: #edf2f0;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .event-tags span.event-transition {
@@ -1889,20 +1633,20 @@ watch(
 
 .event-meta > span {
   color: #5d6965;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .event-meta small {
   margin-left: 5px;
   color: #9ba3a0;
-  font-size: 7px;
+  font-size: 10px;
 }
 
 .event-meta code {
   overflow: hidden;
   max-width: 55%;
   color: #9aa29f;
-  font-size: 7px;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1914,7 +1658,7 @@ watch(
   justify-content: center;
   gap: 10px;
   color: #929c98;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .timeline-empty p {

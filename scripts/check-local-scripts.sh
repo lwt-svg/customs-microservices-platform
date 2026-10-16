@@ -36,6 +36,16 @@ shipment_case_help="$(python3 "${SCRIPT_DIR}/shipment-case-e2e.py" --help)"
     printf '%s\n' "[scripts] FAIL：Shipment Case E2E 帮助缺少 --probe-only。" >&2
     exit 1
   }
+python3 -c \
+  'import pathlib, sys; path = pathlib.Path(sys.argv[1]); compile(path.read_text(encoding="utf-8"), str(path), "exec")' \
+  "${SCRIPT_DIR}/shipment-agent-e2e.py"
+python3 "${SCRIPT_DIR}/shipment-agent-e2e.py" --self-test
+shipment_agent_help="$(python3 "${SCRIPT_DIR}/shipment-agent-e2e.py" --help)"
+[[ "${shipment_agent_help}" == *"--probe-only"* ]] \
+  || {
+    printf '%s\n' "[scripts] FAIL：Shipment Agent E2E 帮助缺少 --probe-only。" >&2
+    exit 1
+  }
 "${SCRIPT_DIR}/test-log-rotation.sh"
 "${SCRIPT_DIR}/test-insight-modes.sh"
 core_help="$("${SCRIPT_DIR}/start-core.sh" --help)"
@@ -71,5 +81,5 @@ else
   printf '%s\n' "[scripts] shellcheck 未安装，已跳过可选检查。"
 fi
 
-printf '%s\n' "[scripts] PASS：Bash/Python 语法、两类 E2E 安全重试、日志轮转、解读模式和帮助入口均通过。"
+printf '%s\n' "[scripts] PASS：Bash/Python 语法、三类 E2E 安全重试、日志轮转、解读模式和帮助入口均通过。"
 printf '%s\n' "[scripts] 仓库：${REPO_ROOT}"

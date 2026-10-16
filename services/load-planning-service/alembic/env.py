@@ -14,7 +14,9 @@ from app.models import (  # noqa: F401 让模型注册到元数据
     agent_run,
     load_planning,
     plan_version,
+    shipment_agent_run,
     shipment_case,
+    shipment_data_readiness,
 )
 
 config = context.config

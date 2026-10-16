@@ -337,6 +337,261 @@ export interface ChangeShipmentCaseStatusInput {
   reason: string
 }
 
+/**
+ * Shipment Coordinator 是一票发运上的总编排 Agent。
+ *
+ * 它不会替代装载 Agent 或 LINK 状态机，而是读取两个专业域的权威事实，在需要人工
+ * 决策、外部回调或专业处理时安全暂停。枚举保留后端稳定代码，页面再负责翻译文案。
+ */
+export type ShipmentAgentRunStatus =
+  | 'RUNNING'
+  | 'WAITING_HUMAN'
+  | 'WAITING_RESOURCE'
+  | 'WAITING_EXTERNAL'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export type ShipmentAgentStage =
+  | 'SYNCING_CASE'
+  | 'AWAITING_SCENARIO_POLICY'
+  | 'ASSESSING_DATA_READINESS'
+  | 'AWAITING_DATA_REMEDIATION'
+  | 'AWAITING_RESOURCE_BINDING'
+  | 'AWAITING_RESOURCE_SELECTION'
+  | 'AWAITING_CASE_ACTIVATION'
+  | 'STARTING_LOAD_AGENT'
+  | 'AWAITING_LOAD_CONSTRAINTS'
+  | 'AWAITING_LOAD_REVIEW'
+  | 'AWAITING_LOAD_RELEASE'
+  | 'AWAITING_LOAD_REPLAN'
+  | 'AWAITING_BOOKING_SUBMIT_APPROVAL'
+  | 'SUBMITTING_BOOKING'
+  | 'AWAITING_BOOKING_RESULT'
+  | 'AWAITING_BOOKING_RETRY_APPROVAL'
+  | 'AWAITING_BOOKING_REPLACEMENT'
+  | 'AWAITING_COMPLETION_APPROVAL'
+  | 'COMPLETING_CASE'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export type ShipmentAgentCapability = 'LOAD_PLANNING' | 'LINK_BOOKING'
+
+export type ShipmentAgentInterruptType =
+  | 'SCENARIO_POLICY_CONFIRMATION'
+  | 'DATA_READINESS_REMEDIATION'
+  | 'RESOURCE_SELECTION'
+  | 'CASE_ACTIVATION_APPROVAL'
+  | 'BOOKING_SUBMIT_APPROVAL'
+  | 'BOOKING_RETRY_APPROVAL'
+  | 'COMPLETION_APPROVAL'
+
+export type ShipmentAgentAction =
+  | 'CONFIRM'
+  | 'SELECT'
+  | 'APPROVE'
+  | 'SUPPLY_DATA'
+  | 'STOP'
+  | 'RECHECK'
+
+export type ShipmentDataReadinessStatus =
+  | 'LEGACY_BYPASSED'
+  | 'NOT_EVALUATED'
+  | 'ACTION_REQUIRED'
+  | 'READY'
+  | 'DEMO_READY'
+
+export type ShipmentDataReadinessSourceMode =
+  | 'NOT_APPLICABLE'
+  | 'OPERATIONAL'
+  | 'DEMO'
+
+export type ShipmentDataReadinessIssueCode =
+  | 'AVAILABLE_QUANTITY_MISSING'
+  | 'INVENTORY_SHORTAGE'
+  | 'MASTER_DATA_UNCONFIRMED'
+  | 'EVIDENCE_STALE'
+  | 'SYNTHETIC_DATA_NOT_ALLOWED'
+
+export type ShipmentDataFactSubjectType = 'CARGO_ITEM' | 'PALLET_SPEC'
+export type ShipmentDataFactType = 'AVAILABLE_QUANTITY' | 'MASTER_DATA_CONFIRMED'
+export type ShipmentDataFactSourceType =
+  | 'MANUAL_CONFIRMATION'
+  | 'CSV_IMPORT'
+  | 'ERP'
+  | 'WMS'
+  | 'SYNTHETIC_DEMO'
+
+/** 数据就绪检查发现的一项业务阻塞；message 是给业务人员看的服务端解释。 */
+export interface ShipmentDataReadinessIssue {
+  issueId: string
+  issueCode: ShipmentDataReadinessIssueCode
+  severity: 'BLOCKING'
+  subjectType: ShipmentDataFactSubjectType
+  subjectCode: string
+  factType: ShipmentDataFactType
+  requiredValue: string | number | boolean | null
+  actualValue: string | number | boolean | null
+  unit: string | null
+  message: string
+  resolution: 'SUPPLY_DATA'
+  ownerRole: 'WAREHOUSE_OPERATOR'
+}
+
+/**
+ * 后端要求业务人员补充的一项事实。
+ *
+ * 第一版根据 factType 选择输入控件：可用库存是数字，主数据确认是布尔值。保留可选的
+ * label/reason/valueType，方便后续策略版本在不破坏旧页面的情况下提供更完整的表单提示。
+ */
+export interface ShipmentAgentRequestedFact {
+  subjectType: ShipmentDataFactSubjectType
+  subjectCode: string
+  factType: ShipmentDataFactType
+  label?: string | null
+  reason?: string | null
+  valueType?: 'NUMBER' | 'INTEGER' | 'BOOLEAN' | 'TEXT' | null
+  unit?: string | null
+  required?: boolean
+}
+
+/** 人工、CSV 或真实业务系统提交给数据就绪门禁的一条可追溯事实。 */
+export interface ShipmentAgentDataFact {
+  subjectType: ShipmentDataFactSubjectType
+  subjectCode: string
+  factType: ShipmentDataFactType
+  value: string | number | boolean
+  sourceType: ShipmentDataFactSourceType
+  sourceReference: string | null
+  sourceLocator: string | null
+  observedAt: string | null
+  expiresAt: string | null
+}
+
+export interface ShipmentDataReadinessIssueCounts {
+  total: number
+  blocking: number
+}
+
+/** Shipment Agent 最近一次数据就绪评估的权威快照。 */
+export interface ShipmentDataReadiness {
+  status: ShipmentDataReadinessStatus
+  revision: number
+  policyVersion: string
+  sourceMode: ShipmentDataReadinessSourceMode
+  snapshotHash: string | null
+  /** 后端 V2 使用 assessedAt；checkedAt 兼容编排契约早期命名。 */
+  assessedAt?: string | null
+  checkedAt?: string | null
+  readyAt?: string | null
+  issueCount?: number
+  blockingIssueCount?: number
+  issueCounts?: ShipmentDataReadinessIssueCounts
+  issues: ShipmentDataReadinessIssue[]
+  /** 活动人工中断通常也会在 details 中返回 requestedFacts。 */
+  requestedFacts?: ShipmentAgentRequestedFact[]
+}
+
+/** 当前暂停点公开给业务人员的结构化任务，不包含模型隐藏推理。 */
+export interface ShipmentAgentInterrupt {
+  type: ShipmentAgentInterruptType
+  title: string
+  description: string
+  allowedActions: ShipmentAgentAction[]
+  details: Record<string, unknown>
+}
+
+/** 总 Agent 的一条只追加运行轨迹。 */
+export interface ShipmentAgentEvent {
+  id: number
+  sequence: number
+  eventType: string
+  stage: ShipmentAgentStage
+  title: string
+  detail: string
+  data: Record<string, unknown>
+  resourceType: string | null
+  resourceNumber: string | null
+  actorSubject: string
+  actorDisplayName: string
+  actorSource: string
+  requestId: string
+  occurredAt: string
+}
+
+/** 装载子 Agent 的最小只读投影；候选方案和 3D 坐标仍由专业工作台负责。 */
+export interface ShipmentAgentChild {
+  runId: string
+  taskNumber: string
+  status: string
+  currentStep: string
+  runVersion: number
+  nextAction: string
+}
+
+/**
+ * Shipment Agent 的业务快照。
+ *
+ * selected*、booking* 和 locked* 字段都来自源系统观察结果；Vue 不会根据案件绑定记录
+ * 自行猜测子流程已经完成。pendingInterrupt 为 null 时，也必须结合 status/currentStage
+ * 判断它是在自动推进、等待专业工作台，还是已经结束。
+ */
+export interface ShipmentAgentRun {
+  runId: string
+  caseNumber: string
+  caseName: string
+  transportScenario: ShipmentTransportScenario
+  caseStatus: ShipmentCaseStatus
+  workflowVersion: string
+  policyVersion: string
+  status: ShipmentAgentRunStatus
+  currentStage: ShipmentAgentStage
+  runVersion: number
+  startedCaseRevision: number
+  lastObservedCaseRevision: number
+  requiredCapabilities: ShipmentAgentCapability[]
+  scenarioPolicyConfirmed: boolean
+  selectedLoadTaskNumber: string | null
+  selectedLoadRunId: string | null
+  lockedLoadVersionId: string | null
+  lockedLoadVersionNumber: number | null
+  selectedBookingApplicationNumber: string | null
+  bookingStatus: string | null
+  carrierSubmissionStatus: string | null
+  bookingReference: string | null
+  bookingSubmissionUncertain: boolean
+  dataReadiness: ShipmentDataReadiness | null
+  nextWakeAt: string | null
+  failureCode: string | null
+  failureMessage: string | null
+  pendingInterrupt: ShipmentAgentInterrupt | null
+  allowedActions: ShipmentAgentAction[]
+  childAgent: ShipmentAgentChild | null
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+  events: ShipmentAgentEvent[]
+}
+
+export interface StartShipmentAgentRunInput {
+  expectedCaseRevision: number
+}
+
+export interface ResumeShipmentAgentRunInput {
+  expectedRunVersion: number
+  interruptType: ShipmentAgentInterruptType
+  action: ShipmentAgentAction
+  comment: string | null
+  selectedResourceNumber: string | null
+  requiredCapabilities: ShipmentAgentCapability[] | null
+  dataFacts: ShipmentAgentDataFact[] | null
+}
+
+export interface ReconcileShipmentAgentRunInput {
+  expectedRunVersion: number
+}
+
 /** 装载主数据的来源类型；SYNTHETIC_DEMO 只用于脱敏学习数据。 */
 export type LoadPlanningSourceType =
   | 'SYNTHETIC_DEMO'
@@ -1075,6 +1330,156 @@ export function changeShipmentCaseStatus(
       409: '案件已发生变化，或当前状态不允许执行该操作。',
       502: 'Java BFF 暂时无法推进 Python 发运案件。',
       503: '发运案件依赖服务暂时不可用。',
+    },
+  )
+}
+
+/** 查询全部 Shipment Coordinator 运行，供 Agent 运行中心展示真实状态。 */
+export function getShipmentAgentRuns(): Promise<ShipmentAgentRun[]> {
+  return requestWithOptions<ShipmentAgentRun[]>(
+    '/api/v1/platform/shipment-agent-runs',
+    undefined,
+    {
+      502: 'Java BFF 暂时无法读取 Shipment Agent 运行。',
+      503: 'Nacos 中没有可用的 Agent Runtime 实例。',
+    },
+  )
+}
+
+/** 查询一票案件当前唯一的活动总 Agent；没有活动运行时返回 null。 */
+export function getActiveShipmentAgentRun(
+  caseNumber: string,
+): Promise<ShipmentAgentRun | null> {
+  return requestWithOptions<ShipmentAgentRun | null>(
+    `/api/v1/platform/shipment-cases/${encodeURIComponent(caseNumber)}/agent-runs/active`,
+    undefined,
+    {
+      400: '发运案件编号不正确。',
+      404: '发运案件不存在。',
+      502: 'Java BFF 暂时无法读取 Shipment Agent 当前运行。',
+      503: 'Agent Runtime 暂时不可用。',
+    },
+  )
+}
+
+/** 查询案件全部总 Agent 历史，包括已经完成、停止或失败的运行。 */
+export function getShipmentAgentRunHistory(
+  caseNumber: string,
+): Promise<ShipmentAgentRun[]> {
+  return requestWithOptions<ShipmentAgentRun[]>(
+    `/api/v1/platform/shipment-cases/${encodeURIComponent(caseNumber)}/agent-runs/history`,
+    undefined,
+    {
+      400: '发运案件编号不正确。',
+      404: '发运案件不存在。',
+      502: 'Java BFF 暂时无法读取 Shipment Agent 历史。',
+      503: 'Agent Runtime 暂时不可用。',
+    },
+  )
+}
+
+/** 按运行编号读取权威快照和完整 Trace。 */
+export function getShipmentAgentRun(runId: string): Promise<ShipmentAgentRun> {
+  return requestWithOptions<ShipmentAgentRun>(
+    `/api/v1/platform/shipment-agent-runs/${encodeURIComponent(runId)}`,
+    undefined,
+    {
+      404: '这次 Shipment Agent 运行不存在。',
+      502: 'Java BFF 暂时无法读取 Shipment Agent 运行。',
+      503: 'Agent Runtime 暂时不可用。',
+    },
+  )
+}
+
+/**
+ * 为案件启动总编排 Agent。
+ *
+ * 总 Agent 不会凭空创建装载任务或订舱草稿；它只编排已经绑定的专业资源。网络结果
+ * 不明确时必须复用同一个 idempotencyKey，避免生成第二条活动运行。
+ */
+export function startShipmentAgentRun(
+  caseNumber: string,
+  input: StartShipmentAgentRunInput,
+  idempotencyKey: string,
+): Promise<ShipmentAgentRun> {
+  return requestWithOptions<ShipmentAgentRun>(
+    `/api/v1/platform/shipment-cases/${encodeURIComponent(caseNumber)}/agent-runs`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+    {
+      400: '启动参数或案件 revision 不正确。',
+      404: '发运案件不存在。',
+      409: '案件已变化、已有活动运行，或幂等键已用于其他命令。',
+      502: 'Java BFF 暂时无法启动 Shipment Agent。',
+      503: 'Agent Runtime 或专业依赖暂时不可用。',
+    },
+  )
+}
+
+/**
+ * 恢复一个明确的人工 interrupt。
+ *
+ * interruptType 与 expectedRunVersion 会阻止旧页面把审批提交到已经变化的节点。审批
+ * 评论、资源选择和能力策略只在对应 interrupt 中发送，其他字段保持 null。
+ */
+export function resumeShipmentAgentRun(
+  runId: string,
+  input: ResumeShipmentAgentRunInput,
+  idempotencyKey: string,
+): Promise<ShipmentAgentRun> {
+  return requestWithOptions<ShipmentAgentRun>(
+    `/api/v1/platform/shipment-agent-runs/${encodeURIComponent(runId)}/resume`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+    {
+      400: '人工动作与当前暂停点不匹配，请检查选择和说明。',
+      404: '这次 Shipment Agent 运行不存在。',
+      409: '运行已经变化或该幂等键已用于另一条命令，请刷新后重试。',
+      502: 'Java BFF 暂时无法恢复 Shipment Agent。',
+      503: 'Agent Runtime 或专业依赖暂时不可用。',
+    },
+  )
+}
+
+/**
+ * 显式重新观察案件和专业系统。
+ *
+ * GET 永远不推进流程；用户在装载工作台处理完约束/审批/发布，或等待承运人回调后，
+ * 由这个命令让总 Agent 从 checkpoint 继续读取权威事实。
+ */
+export function reconcileShipmentAgentRun(
+  runId: string,
+  input: ReconcileShipmentAgentRunInput,
+  idempotencyKey: string,
+): Promise<ShipmentAgentRun> {
+  return requestWithOptions<ShipmentAgentRun>(
+    `/api/v1/platform/shipment-agent-runs/${encodeURIComponent(runId)}/reconcile`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+    {
+      400: '重新检查请求不符合接口要求。',
+      404: '这次 Shipment Agent 运行不存在。',
+      409: '运行已变化，请刷新后再重新检查。',
+      502: 'Java BFF 暂时无法重新检查 Shipment Agent。',
+      503: 'Agent Runtime 或专业依赖暂时不可用。',
     },
   )
 }
