@@ -10,9 +10,9 @@
 4. 业务人员分两轮补数，证明 Agent 会自动重评、继续追问并从中断点恢复；
 5. 人工批准案件激活；
 6. 在装载专业工作台对应的 API 中批准候选方案并发布不可变 V1；
-7. 让总 Agent reconcile 后批准 LINK 提交；
+7. 由 8200 进程内 Worker 自动发现正式装载 V1，再人工批准 LINK 提交；
 8. 通过固定的本机模拟承运人 ``:8100`` 开始处理并确认；
-9. 再次 reconcile，人工批准结案，断言 Agent、案件和 Trace 均已闭环。
+9. Worker 自动发现 LINK 已确认，人工批准结案，断言 Agent、案件和 Trace 均已闭环。
 
 业务系统 API 只允许访问 ``http://127.0.0.1:8080/api/v1/platform/*``。模拟承运人客户端
 只允许访问 ``http://127.0.0.1:8100/api/v1/portal/*``，不会调用承运人平台接单入口，更
@@ -20,8 +20,9 @@
 前缀，装载数据来源固定为 ``SYNTHETIC_DEMO``。
 
 完整模式要求先运行 ``./scripts/run-local.sh full``。脚本不会后台死循环：等待承运人
-回调时只在本机 E2E 进程内做有上限的 GET 轮询；Shipment Agent 自身仍由显式 reconcile
-恢复，不占用服务端请求线程等待外部系统。
+回调和自动唤醒时只在本机 E2E 进程内做有上限的 GET 轮询；Shipment Agent 由跟随 8200
+FastAPI 生命周期运行的 Worker 自动恢复，不占用服务端请求线程等待外部系统。显式
+``reconcile`` 仍保留为故障排查时的人工兜底，但不再属于正常业务链路。
 """
 
 from __future__ import annotations
@@ -658,7 +659,10 @@ def reconcile_agent(
     *,
     quiet: bool,
 ) -> dict[str, Any]:
-    """显式要求总 Agent 重新读取装载与 LINK 权威事实。"""
+    """故障兜底：显式要求总 Agent 重新读取装载与 LINK 权威事实。
+
+    正常 E2E 不调用这个入口；保留该客户端是为了验证平台仍有管理员手工恢复能力。
+    """
 
     run_id = run.get("runId")
     require(isinstance(run_id, str) and run_id, "总 Agent 响应缺少 runId")
@@ -673,6 +677,103 @@ def reconcile_agent(
         idempotency_key("reconcile"),
         quiet=quiet,
     )
+
+
+def assert_automatic_wake_scheduled(
+    run: dict[str, Any],
+    *,
+    expected_reason: str,
+) -> None:
+    """等待外部/专业系统时必须留下下一次自动检查计划。"""
+
+    next_wake_at = run.get("nextWakeAt")
+    require(
+        isinstance(next_wake_at, str) and next_wake_at,
+        "总 Agent 进入自动等待状态后没有返回 nextWakeAt",
+    )
+    require(
+        run.get("wakeReason") == expected_reason,
+        f"总 Agent 自动检查原因不是 {expected_reason}",
+    )
+
+
+def assert_manual_wait_has_no_automatic_wake(run: dict[str, Any]) -> None:
+    """人工审批点不应继续后台轮询，避免无意义唤醒。"""
+
+    require(
+        run.get("nextWakeAt") is None,
+        "总 Agent 已进入人工审批点，但 nextWakeAt 仍未清空",
+    )
+    require(
+        run.get("wakeReason") is None,
+        "总 Agent 已进入人工审批点，但 wakeReason 仍未清空",
+    )
+
+
+def wait_for_agent_stage(
+    client: Any,
+    run_id: str,
+    *,
+    status: str,
+    stage: str,
+    interrupt_type: str | None,
+    wait_seconds: int,
+    quiet: bool,
+) -> dict[str, Any]:
+    """只用 GET 等待进程内 Worker 把总 Agent 自动推进到目标阶段。"""
+
+    path = f"{SHIPMENT_AGENT_RUNS_PATH}/{run_id}"
+    deadline = time.monotonic() + max(0, wait_seconds)
+    last_run: dict[str, Any] | None = None
+    last_error: E2EError | None = None
+
+    while True:
+        try:
+            current = require_object(
+                client.request("GET", path),
+                "自动唤醒后的总 Agent 详情必须是对象",
+            )
+            last_run = current
+            if current.get("status") == status and current.get("currentStage") == stage:
+                assert_agent_wait(
+                    current,
+                    status=status,
+                    stage=stage,
+                    interrupt_type=interrupt_type,
+                )
+                projection_is_settled = (
+                    current.get("wakeReason") != "REPAIR_CONTROL_PROJECTION"
+                    and (
+                        status
+                        not in {
+                            "WAITING_HUMAN",
+                            "COMPLETED",
+                            "FAILED",
+                            "CANCELLED",
+                        }
+                        or current.get("nextWakeAt") is None
+                    )
+                )
+                if projection_is_settled:
+                    return current
+        except E2EError as exc:
+            last_error = exc
+
+        if time.monotonic() >= deadline:
+            if last_run is not None:
+                observed = f"{last_run.get('status')}/{last_run.get('currentStage')}"
+            else:
+                observed = f"读取失败：{last_error or '未知错误'}"
+            raise ContractError(
+                f"等待 Worker 自动推进到 {status}/{stage} 超时；最后状态为 {observed}。"
+                "可检查 8200 日志，必要时再使用“立即检查（故障兜底）”"
+            )
+
+        log(
+            f"等待 8200 内置 Worker 自动推进到 {stage}。",
+            quiet=quiet,
+        )
+        time.sleep(0.5)
 
 
 def recover_load_run_status(
@@ -1334,6 +1435,10 @@ def run_e2e(
         child_projection.get("status") == "READY_FOR_REVIEW",
         "装载子 Agent 投影不是 READY_FOR_REVIEW",
     )
+    assert_automatic_wake_scheduled(
+        run,
+        expected_reason="POLL_LOAD_STATUS",
+    )
 
     log("9/17 在装载专业流程中批准可行方案。", quiet=quiet)
     child_run = require_object(
@@ -1350,14 +1455,17 @@ def run_e2e(
         "装载审批返回了不同的子运行",
     )
 
-    log("10/17 发布 LOCKED V1 后，让总 Agent 重新读取专业结果。", quiet=quiet)
-    run = reconcile_agent(bff, run, quiet=quiet)
-    assert_agent_wait(
-        run,
+    log("10/17 发布 LOCKED V1 后，等待 Worker 自动读取专业结果。", quiet=quiet)
+    run = wait_for_agent_stage(
+        bff,
+        run_id,
         status="WAITING_HUMAN",
         stage="AWAITING_BOOKING_SUBMIT_APPROVAL",
         interrupt_type="BOOKING_SUBMIT_APPROVAL",
+        wait_seconds=wait_seconds,
+        quiet=quiet,
     )
+    assert_manual_wait_has_no_automatic_wake(run)
     require(
         run.get("lockedLoadVersionId") == locked_version.get("versionId")
         and run.get("lockedLoadVersionNumber") == 1,
@@ -1379,6 +1487,10 @@ def run_e2e(
         interrupt_type=None,
     )
     require(run.get("bookingStatus") == "SUBMITTED", "LINK 申请未进入 SUBMITTED")
+    assert_automatic_wake_scheduled(
+        run,
+        expected_reason="POLL_LINK_STATUS",
+    )
 
     log("12/17 等待本机模拟承运人收到可靠投递。", quiet=quiet)
     carrier_booking = wait_for_carrier_booking(
@@ -1411,20 +1523,17 @@ def run_e2e(
         "LINK 与模拟承运人的 booking reference 不一致",
     )
 
-    log("15/17 显式 reconcile，并等待最终结案审批。", quiet=quiet)
-    # 外部回调只更新 LINK 的权威事实，不会偷偷唤醒或改写总 Agent。先 GET 最新运行版本，
-    # 再发一次有幂等键的 reconcile，体现“外部等待不占线程、恢复由命令驱动”。
-    run = require_object(
-        bff.request("GET", f"{SHIPMENT_AGENT_RUNS_PATH}/{run_id}"),
-        "重新读取的总 Agent 详情必须是对象",
-    )
-    run = reconcile_agent(bff, run, quiet=quiet)
-    assert_agent_wait(
-        run,
+    log("15/17 等待 Worker 自动读取 LINK 终态并进入结案审批。", quiet=quiet)
+    run = wait_for_agent_stage(
+        bff,
+        run_id,
         status="WAITING_HUMAN",
         stage="AWAITING_COMPLETION_APPROVAL",
         interrupt_type="COMPLETION_APPROVAL",
+        wait_seconds=wait_seconds,
+        quiet=quiet,
     )
+    assert_manual_wait_has_no_automatic_wake(run)
     require(run.get("bookingStatus") == "CONFIRMED", "总 Agent 未读到 LINK CONFIRMED")
     require(
         run.get("bookingReference") == link_application.get("bookingReference"),

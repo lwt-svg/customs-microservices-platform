@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
   getActiveShipmentAgentRun,
@@ -42,6 +42,7 @@ const actionBusy = ref(false)
 const loadError = ref('')
 const actionError = ref('')
 const lastRefreshedAt = ref<Date | null>(null)
+let waitingRefreshTimer: number | undefined
 
 // 网络结果不明确时，同一个页面重试必须复用原 key。成功后才清除，避免重复创建运行或
 // 重放外部副作用；刷新页面后服务端命令台账仍是最终防线。
@@ -136,7 +137,7 @@ const stageCopy: Record<
   AWAITING_BOOKING_RESULT: {
     eyebrow: '等待外部结果',
     title: '等待承运人异步结果',
-    description: '当前不会占用请求线程；收到回调后，重新检查即可恢复流程。',
+    description: '当前不会占用请求线程；系统会自动跟踪回调并恢复流程，立即检查只作故障兜底。',
   },
   AWAITING_BOOKING_RETRY_APPROVAL: {
     eyebrow: '等待恢复批准',
@@ -176,6 +177,17 @@ const stageCopy: Record<
 }
 
 const displayRun = computed(() => run.value ?? history.value[0] ?? null)
+
+const openNotifications = computed(() => {
+  const severityOrder = { ERROR: 0, WARNING: 1, INFO: 2 }
+  return [...(displayRun.value?.notifications ?? [])]
+    .filter((notification) => notification.status === 'OPEN')
+    .sort(
+      (left, right) =>
+        severityOrder[left.severity] - severityOrder[right.severity] ||
+        new Date(right.lastSeenAt).getTime() - new Date(left.lastSeenAt).getTime(),
+    )
+})
 
 const currentCopy = computed(() =>
   displayRun.value
@@ -447,6 +459,31 @@ const canReconcile = computed(
     !['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.value?.status ?? ''),
 )
 
+const waitingStatuses = new Set<ShipmentAgentRunStatus>([
+  'RUNNING',
+  'WAITING_RESOURCE',
+  'WAITING_EXTERNAL',
+])
+
+const shouldAutoRefreshWaitingState = computed(
+  () =>
+    Boolean(
+      run.value &&
+        (waitingStatuses.has(run.value.status) ||
+          run.value.wakeReason === 'REPAIR_CONTROL_PROJECTION'),
+    ),
+)
+
+const showsAutoTrackingCard = computed(
+  () =>
+    Boolean(run.value) &&
+    !run.value?.pendingInterrupt &&
+    (Boolean(run.value?.nextWakeAt) ||
+      ['RUNNING', 'WAITING_RESOURCE', 'WAITING_EXTERNAL'].includes(
+        run.value?.status ?? '',
+      )),
+)
+
 const lastRun = computed(() => history.value[0] ?? null)
 
 function createIdempotencyKey(prefix: string): string {
@@ -589,6 +626,53 @@ function formatRefreshTime(value: Date | null): string {
   }).format(value)
 }
 
+function formatBusinessDateTime(value: string | null): string {
+  if (!value) return '尚未安排'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '尚未安排'
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
+function wakeReasonLabel(value: string | null): string {
+  if (!value) return '按当前业务阶段重新检查'
+  const labels: Record<string, string> = {
+    RECOVER_RUNNING_STEP: '恢复尚未完成的自动步骤',
+    POLL_LINK_STATUS: '跟踪 LINK 与承运人结果',
+    POLL_LOAD_STATUS: '跟踪智能装载进度',
+    POLL_RESOURCE_BINDING: '检查专业作业是否已经绑定',
+    RETRY_AFTER_AUTO_WAKE_FAILURE: '等待退避时间后自动重试',
+    // 保留早期开发版本的兼容映射，历史快照仍能显示为业务语言。
+    LOAD_PLANNING_PROGRESS: '跟踪智能装载进度',
+    LINK_BOOKING_RESULT: '跟踪 LINK 与承运人结果',
+    AUTOMATIC_RECOVERY: '恢复尚未完成的自动步骤',
+    RETRY_AFTER_FAILURE: '等待退避时间后重试',
+  }
+  return labels[value] ?? '按当前业务阶段重新检查'
+}
+
+function notificationOwnerLabel(value: string): string {
+  const labels: Record<string, string> = {
+    SYSTEM: '系统自动处理',
+    SHIPMENT_COORDINATOR: '发运协调员',
+    SHIPMENT_OWNER: '发运负责人',
+    SHIPMENT_MANAGER: '发运经理',
+    WAREHOUSE_OPERATOR: '仓库业务员',
+    WAREHOUSE_SUPERVISOR: '仓库主管',
+    LOAD_PLANNER: '装载规划员',
+    LOAD_REVIEWER: '装载审核员',
+    BOOKING_OPERATOR: '订舱业务员',
+    PLATFORM_OPERATOR: '平台运营人员',
+  }
+  return labels[value] ?? value
+}
+
 watch(
   () => props.caseNumber,
   () => {
@@ -602,7 +686,25 @@ watch(
   },
 )
 
-onMounted(loadAgent)
+onMounted(() => {
+  void loadAgent()
+  waitingRefreshTimer = window.setInterval(() => {
+    if (
+      shouldAutoRefreshWaitingState.value &&
+      !document.hidden &&
+      !loading.value &&
+      !actionBusy.value
+    ) {
+      void loadAgent()
+    }
+  }, 5_000)
+})
+
+onBeforeUnmount(() => {
+  if (waitingRefreshTimer !== undefined) {
+    window.clearInterval(waitingRefreshTimer)
+  }
+})
 </script>
 
 <template>
@@ -679,6 +781,40 @@ onMounted(loadAgent)
         </div>
       </section>
 
+      <section
+        v-if="openNotifications.length"
+        class="agent-notification-panel"
+        aria-label="当前开放通知"
+      >
+        <header>
+          <div>
+            <span>当前开放通知</span>
+            <strong>{{ openNotifications.length }} 项业务关注事项</strong>
+          </div>
+          <small>相同问题会合并更新，不会重复生成通知</small>
+        </header>
+        <div class="agent-notification-list">
+          <article
+            v-for="notification in openNotifications"
+            :key="notification.id"
+            :data-severity="notification.severity"
+          >
+            <span><UiIcon :name="notification.severity === 'ERROR' ? 'alert' : 'clock'" /></span>
+            <div>
+              <small>
+                {{ notificationOwnerLabel(notification.ownerRole) }}
+                · 最近更新 {{ formatBusinessDateTime(notification.lastSeenAt) }}
+              </small>
+              <strong>{{ notification.title }}</strong>
+              <p>{{ notification.message }}</p>
+            </div>
+            <em v-if="notification.occurrenceCount > 1">
+              已合并 {{ notification.occurrenceCount }} 次
+            </em>
+          </article>
+        </div>
+      </section>
+
       <section v-if="!run && (!lastRun || canStart)" class="agent-start-card">
         <span class="agent-start-icon"><UiIcon name="layers" /></span>
         <div>
@@ -715,7 +851,7 @@ onMounted(loadAgent)
         />
 
         <section
-          v-else-if="canReconcile"
+          v-else-if="canReconcile || showsAutoTrackingCard"
           class="agent-wait-card"
           :data-status="run.status"
         >
@@ -724,29 +860,33 @@ onMounted(loadAgent)
             <strong>
               {{
                 isAutomaticRecoveryState
-                  ? '自动执行已提交，正在等待恢复'
+                  ? '系统正在自动恢复本票流程'
                   : run.status === 'WAITING_EXTERNAL'
-                  ? '正在等待承运人回复'
-                  : '请先完成专业工作台中的待办'
+                  ? '系统正在自动跟踪承运人回复'
+                  : '系统正在自动跟踪专业作业进度'
               }}
             </strong>
             <p>
               {{
-                isAutomaticRecoveryState
-                  ? '可从数据库记录的当前阶段恢复自动执行；系统会先同步权威状态，幂等保护会避免重复补数或重复提交。'
-                  : '处理完成或承运人回调后，点击重新检查；系统会从当前暂停点重新读取权威状态，已完成的步骤不会重复提交。'
+                run.nextWakeAt
+                  ? `已安排在 ${formatBusinessDateTime(run.nextWakeAt)} 自动检查；系统会从当前暂停点读取权威状态，已完成的步骤不会重复提交。`
+                  : '页面会自动同步最新状态；外部结果或专业作业完成后，系统会从当前暂停点继续，不需要业务人员重复提交。'
               }}
             </p>
+            <div v-if="run.nextWakeAt" class="agent-wake-meta">
+              <span>{{ wakeReasonLabel(run.wakeReason) }}</span>
+              <strong>下次自动检查 {{ formatBusinessDateTime(run.nextWakeAt) }}</strong>
+            </div>
           </div>
-          <button type="button" :disabled="actionBusy" @click="reconcile">
+          <button
+            v-if="canReconcile"
+            class="fallback-check"
+            type="button"
+            :disabled="actionBusy"
+            @click="reconcile"
+          >
             <UiIcon name="refresh" />
-            {{
-              actionBusy
-                ? '检查中…'
-                : isAutomaticRecoveryState
-                  ? '恢复自动执行 / 重新检查'
-                  : '重新检查并继续'
-            }}
+            {{ actionBusy ? '检查中…' : '立即检查（故障兜底）' }}
           </button>
         </section>
 
@@ -786,6 +926,8 @@ onMounted(loadAgent)
             <div><span>当前节点</span><code>{{ run.currentStage }}</code></div>
             <div><span>工作流版本</span><code>{{ run.workflowVersion }}</code></div>
             <div><span>策略 / 运行版本</span><code>{{ run.policyVersion }} · R{{ run.runVersion }}</code></div>
+            <div><span>下次自动检查</span><code>{{ formatBusinessDateTime(run.nextWakeAt) }}</code></div>
+            <div><span>唤醒原因</span><code>{{ run.wakeReason || '—' }}</code></div>
             <div v-if="run.childAgent">
               <span>装载子运行</span>
               <code>{{ run.childAgent.runId }}</code>
@@ -1128,6 +1270,122 @@ onMounted(loadAgent)
   color: #285d4b;
 }
 
+.agent-notification-panel {
+  overflow: hidden;
+  border: 1px solid #e1e7e4;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.agent-notification-panel > header {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 14px;
+  border-bottom: 1px solid #edf0ef;
+  background: #fafbfb;
+}
+
+.agent-notification-panel > header span,
+.agent-notification-panel > header strong {
+  display: block;
+}
+
+.agent-notification-panel > header span {
+  color: #7b8983;
+  font-size: 11px;
+}
+
+.agent-notification-panel > header strong {
+  margin-top: 3px;
+  color: #34413c;
+  font-size: 13px;
+}
+
+.agent-notification-panel > header small {
+  color: #929b97;
+  font-size: 11px;
+}
+
+.agent-notification-list {
+  display: grid;
+}
+
+.agent-notification-list article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: start;
+  padding: 13px 14px;
+  border-bottom: 1px solid #edf0ef;
+}
+
+.agent-notification-list article:last-child {
+  border-bottom: 0;
+}
+
+.agent-notification-list article > span {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 9px;
+  color: #4e7193;
+  background: #e9f0f7;
+}
+
+.agent-notification-list article[data-severity="WARNING"] > span {
+  color: #88661f;
+  background: #f7ecd0;
+}
+
+.agent-notification-list article[data-severity="ERROR"] > span {
+  color: #985050;
+  background: #f8e8e8;
+}
+
+.agent-notification-list article > span :deep(.ui-icon) {
+  width: 15px;
+}
+
+.agent-notification-list small,
+.agent-notification-list strong,
+.agent-notification-list p {
+  display: block;
+  margin: 0;
+}
+
+.agent-notification-list small {
+  color: #929b97;
+  font-size: 11px;
+}
+
+.agent-notification-list strong {
+  margin-top: 4px;
+  color: #35423d;
+  font-size: 13px;
+}
+
+.agent-notification-list p {
+  margin-top: 4px;
+  color: #727e79;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-notification-list em {
+  align-self: center;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #757f7b;
+  background: #f0f2f1;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .agent-pipeline {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1285,6 +1543,26 @@ onMounted(loadAgent)
   line-height: 1.6;
 }
 
+.agent-wake-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+}
+
+.agent-wake-meta span,
+.agent-wake-meta strong {
+  font-size: 11px;
+}
+
+.agent-wake-meta span {
+  color: #71807a;
+}
+
+.agent-wake-meta strong {
+  color: #3f6656;
+}
+
 .agent-start-card > button,
 .agent-wait-card > button {
   display: inline-flex;
@@ -1299,6 +1577,18 @@ onMounted(loadAgent)
   cursor: pointer;
   font-size: 12px;
   font-weight: 700;
+}
+
+.agent-wait-card > button.fallback-check {
+  border-color: #cbd8d2;
+  color: #52665e;
+  background: #fff;
+}
+
+.agent-wait-card > button.fallback-check:hover:not(:disabled) {
+  border-color: #9fb8ad;
+  color: #2f5e4e;
+  background: #f7faf8;
 }
 
 .agent-start-card > button:disabled,
@@ -1498,6 +1788,20 @@ onMounted(loadAgent)
 
   .business-focus-grid article:last-child {
     border-bottom: 0;
+  }
+
+  .agent-notification-panel > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .agent-notification-list article {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .agent-notification-list em {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .agent-start-card,

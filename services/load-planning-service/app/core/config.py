@@ -48,6 +48,37 @@ class Settings(BaseSettings):
         "../../runtime/checkpoints/load-planning-langgraph.sqlite3"
     )
 
+    # --- Shipment Agent 自动唤醒 ---
+    # Worker 随当前 FastAPI 进程的 lifespan 启停，不增加 Redis、Celery 或第二条启动命令。
+    # 所有值都有安全默认值；已有 .env.local 不补这些变量也可以直接升级运行。
+    shipment_agent_wake_worker_enabled: bool = True
+    shipment_agent_wake_poll_seconds: float = Field(default=2.0, gt=0, le=60)
+    shipment_agent_wake_lease_seconds: float = Field(default=30.0, gt=5, le=300)
+    shipment_agent_wake_batch_size: int = Field(default=20, ge=1, le=200)
+    shipment_agent_wake_wait_seconds: float = Field(default=5.0, gt=0, le=300)
+    shipment_agent_wake_resource_binding_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=600,
+    )
+    shipment_agent_wake_recovery_grace_seconds: float = Field(
+        # RUNNING 每次落库时都会显式设置这段恢复窗口；正常 Graph 一般会在窗口内走到
+        # 等待点并重算计划，只有进程中途退出时才由 Worker 接管恢复。
+        default=120.0,
+        gt=0,
+        le=600,
+    )
+    shipment_agent_wake_retry_base_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        le=60,
+    )
+    shipment_agent_wake_retry_max_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        le=3_600,
+    )
+
     # --- 候选方案解读 Copilot ---
     # 默认关闭，避免开发者只启动 Python 服务就意外产生外部模型调用或费用。它不是
     # LangGraph 的决策节点，也不会写数据库；开启后只为已经生成的候选方案补充说明文字。

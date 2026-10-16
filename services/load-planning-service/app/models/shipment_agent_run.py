@@ -54,6 +54,12 @@ class ShipmentAgentRunStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+# 这不是业务状态，也不是新的工作流阶段。它只是一条短期控制面恢复标记：
+# 业务事务已经提交后，正常请求会立刻调用通知/唤醒投影并覆盖或清除它；若进程恰好在
+# 两者之间崩溃，后台 Worker 才会在宽限期后领取该运行，仅修复控制面投影。
+SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON = "REPAIR_CONTROL_PROJECTION"
+
+
 class ShipmentAgentStage(StrEnum):
     """Shipment Agent 的可审计阶段。
 
@@ -128,6 +134,35 @@ class ShipmentAgentCommandResult(StrEnum):
     NO_OP = "NO_OP"
 
 
+class ShipmentAgentNotificationType(StrEnum):
+    """站内业务通知的稳定分类。
+
+    通知不是另一套工作流状态机。它只把运行当前已经形成的业务事实投影成“谁需要关注
+    什么”的待办，因此飞书、邮件等外部渠道以后只能消费通知，不能反向决定 Agent 状态。
+    """
+
+    ACTION_REQUIRED = "ACTION_REQUIRED"
+    RESOURCE_ATTENTION = "RESOURCE_ATTENTION"
+    EXTERNAL_WAIT = "EXTERNAL_WAIT"
+    RUN_FAILED = "RUN_FAILED"
+    AUTO_WAKE_FAILED = "AUTO_WAKE_FAILED"
+
+
+class ShipmentAgentNotificationSeverity(StrEnum):
+    """通知严重度；用于页面排序和将来的渠道升级策略。"""
+
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
+class ShipmentAgentNotificationStatus(StrEnum):
+    """通知是否仍然需要业务关注。"""
+
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+
+
 class ShipmentAgentRun(Base):
     """一条 Shipment Coordinator Agent 运行。"""
 
@@ -141,12 +176,22 @@ class ShipmentAgentRun(Base):
             "data_readiness_revision >= 0",
             name="ck_shipment_agent_runs_readiness_revision_non_negative",
         ),
+        CheckConstraint(
+            "wake_attempt_count >= 0",
+            name="ck_shipment_agent_runs_wake_attempt_non_negative",
+        ),
         UniqueConstraint(
             "start_idempotency_key_hash",
             name="uq_shipment_agent_runs_start_idempotency_key",
         ),
         Index("ix_shipment_agent_runs_case_id", "case_id"),
         Index("ix_shipment_agent_runs_status", "status"),
+        Index(
+            "ix_shipment_agent_runs_status_next_wake",
+            "status",
+            "next_wake_at",
+        ),
+        Index("ix_shipment_agent_runs_wake_lease_until", "wake_lease_until"),
         Index("ix_shipment_agent_runs_updated_at", "updated_at"),
     )
 
@@ -263,6 +308,20 @@ class ShipmentAgentRun(Base):
         nullable=True,
     )
 
+    # 自动唤醒字段属于运行控制面，不改变业务 run_version。后台 Worker 先用条件 UPDATE
+    # 领取短租约，再只读检查装载/LINK 权威状态；没有真实变化时不会追加 Trace。
+    next_wake_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    wake_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    wake_attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    wake_lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    wake_lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_wake_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    wake_last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     failure_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -287,6 +346,97 @@ class ShipmentAgentRun(Base):
         lazy="selectin",
         order_by="ShipmentAgentEvent.sequence",
     )
+    notifications: Mapped[list["ShipmentAgentNotification"]] = relationship(
+        back_populates="run",
+        # 历史通知用于审计“何时提醒过谁”；状态变化只把旧通知标记为 RESOLVED。
+        lazy="selectin",
+        order_by="ShipmentAgentNotification.created_at",
+    )
+
+
+class ShipmentAgentNotification(Base):
+    """由 Agent 运行事实投影出的站内通知。
+
+    ``dedupe_key`` 在同一运行内稳定。例如装载方案连续多次轮询仍停在评审节点时，只更新
+    同一条通知，不会制造通知风暴。离开该节点后通知改为 RESOLVED；未来重新进入时再
+    打开同一业务通知并增加 occurrence_count。
+    """
+
+    __tablename__ = "shipment_agent_notifications"
+    __table_args__ = (
+        CheckConstraint(
+            "occurrence_count > 0",
+            name="ck_shipment_agent_notifications_occurrence_positive",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "dedupe_key",
+            name="uq_shipment_agent_notifications_run_dedupe",
+        ),
+        Index(
+            "ix_shipment_agent_notifications_status_created",
+            "status",
+            "created_at",
+        ),
+        Index("ix_shipment_agent_notifications_run_id", "run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("shipment_agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_event_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    notification_type: Mapped[ShipmentAgentNotificationType] = mapped_column(
+        Enum(
+            ShipmentAgentNotificationType,
+            name="shipment_agent_notification_type",
+            native_enum=False,
+            length=32,
+        ),
+        nullable=False,
+    )
+    severity: Mapped[ShipmentAgentNotificationSeverity] = mapped_column(
+        Enum(
+            ShipmentAgentNotificationSeverity,
+            name="shipment_agent_notification_severity",
+            native_enum=False,
+            length=16,
+        ),
+        nullable=False,
+    )
+    status: Mapped[ShipmentAgentNotificationStatus] = mapped_column(
+        Enum(
+            ShipmentAgentNotificationStatus,
+            name="shipment_agent_notification_status",
+            native_enum=False,
+            length=16,
+        ),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_role: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_context: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    run: Mapped[ShipmentAgentRun] = relationship(back_populates="notifications")
 
 
 class ShipmentAgentEvent(Base):

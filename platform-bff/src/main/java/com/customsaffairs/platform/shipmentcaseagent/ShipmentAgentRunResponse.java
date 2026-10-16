@@ -35,6 +35,8 @@ public record ShipmentAgentRunResponse(
         boolean bookingSubmissionUncertain,
         ShipmentDataReadinessResponse dataReadiness,
         String nextWakeAt,
+        String wakeReason,
+        List<ShipmentAgentNotificationResponse> notifications,
         String failureCode,
         String failureMessage,
         ShipmentAgentPendingInterruptResponse pendingInterrupt,

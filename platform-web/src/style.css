@@ -5178,7 +5178,7 @@ div.resource-row {
   align-items: center;
   gap: 8px;
   color: #6f857b;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -5227,12 +5227,12 @@ div.resource-row {
 
 .shipment-sync-state span {
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .shipment-sync-state strong {
   color: #59625e;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -5280,7 +5280,7 @@ div.resource-row {
 
 .shipment-kpi-card small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   font-style: normal;
 }
 
@@ -5294,7 +5294,7 @@ div.resource-row {
 .shipment-kpi-card em {
   overflow: hidden;
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 10px;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5350,7 +5350,7 @@ div.resource-row {
 .shipment-list-heading > div > span,
 .shipment-section-heading > div > span {
   color: #6b897b;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.11em;
 }
@@ -5367,7 +5367,7 @@ div.resource-row {
 .shipment-section-heading p {
   margin: 0;
   color: var(--subtle);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
@@ -5379,7 +5379,7 @@ div.resource-row {
   border-radius: 999px;
   color: #3d6d56;
   background: var(--green-soft);
-  font-size: 9px;
+  font-size: 10px;
   white-space: nowrap;
 }
 
@@ -5432,7 +5432,7 @@ div.resource-row {
   outline: none;
   color: var(--text);
   background: transparent;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .shipment-select-filter {
@@ -5445,7 +5445,7 @@ div.resource-row {
   border-radius: 9px;
   color: var(--muted);
   background: #ffffff;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .shipment-select-filter select {
@@ -5463,7 +5463,7 @@ div.resource-row {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   white-space: nowrap;
 }
 
@@ -5479,7 +5479,7 @@ div.resource-row {
   color: #526d85;
   background: transparent;
   cursor: pointer;
-  font-size: 9px;
+  font-size: 10px;
   white-space: nowrap;
 }
 
@@ -5521,7 +5521,7 @@ div.resource-row {
 .shipment-empty-state p {
   margin: 0;
   color: var(--subtle);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .shipment-case-table {
@@ -5545,7 +5545,7 @@ div.resource-row {
 
 .shipment-case-identity-cell strong {
   color: var(--text);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -5564,18 +5564,18 @@ div.resource-row {
 
 .shipment-scenario-cell strong {
   color: var(--text);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .shipment-scenario-cell small {
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .shipment-organization-code {
   color: #59625e;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .shipment-resource-chips {
@@ -5592,7 +5592,7 @@ div.resource-row {
   border-radius: 999px;
   color: #486b5b;
   background: #edf6f1;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .shipment-resource-chips > span.empty {
@@ -5601,7 +5601,7 @@ div.resource-row {
 }
 
 .shipment-resource-chips b {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .shipment-status-pill {
@@ -5620,7 +5620,7 @@ div.resource-row {
 
 .shipment-status-pill.compact {
   padding: 4px 8px;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
 }
 

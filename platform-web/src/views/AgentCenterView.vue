@@ -305,6 +305,12 @@ function humanTaskOwner(run: ShipmentAgentRun): string {
     : '案件业务负责人'
 }
 
+function openNotificationCount(run: ShipmentAgentRun): number {
+  return (run.notifications ?? []).filter(
+    (notification) => notification.status === 'OPEN',
+  ).length
+}
+
 function formatDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
@@ -316,6 +322,10 @@ function formatDateTime(value: string): string {
     second: '2-digit',
     hour12: false,
   }).format(date)
+}
+
+function formatOptionalDateTime(value: string | null): string {
+  return value ? formatDateTime(value) : '未安排'
 }
 
 function formatRefreshTime(value: Date | null): string {
@@ -544,6 +554,14 @@ onBeforeUnmount(() => {
                   ?? 0
               }} 项
             </strong>
+          </div>
+          <div>
+            <span>下次自动检查</span>
+            <strong>{{ formatOptionalDateTime(selectedRun.nextWakeAt) }}</strong>
+          </div>
+          <div>
+            <span>开放通知</span>
+            <strong>{{ openNotificationCount(selectedRun) }} 项</strong>
           </div>
         </div>
 
@@ -1019,12 +1037,13 @@ onBeforeUnmount(() => {
 
 .agent-center-kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 11px;
 }
 
 .agent-center-kpis button {
   display: grid;
+  grid-column: span 3;
   min-height: 86px;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 11px;
@@ -1036,6 +1055,10 @@ onBeforeUnmount(() => {
   background: #fff;
   cursor: pointer;
   text-align: left;
+}
+
+.agent-center-kpis button:nth-child(n + 5) {
+  grid-column: span 4;
 }
 
 .agent-center-kpis button.active {
@@ -1630,8 +1653,7 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1080px) {
-  .agent-inventory,
-  .agent-center-kpis {
+  .agent-inventory {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1671,6 +1693,11 @@ onBeforeUnmount(() => {
   .agent-inventory,
   .agent-center-kpis {
     grid-template-columns: 1fr;
+  }
+
+  .agent-center-kpis button,
+  .agent-center-kpis button:nth-child(n + 5) {
+    grid-column: auto;
   }
 
   .agent-center-toolbar {

@@ -453,6 +453,8 @@ class ShipmentAgentRunControllerTest {
                                             "WAREHOUSE_OPERATOR"))),
                     null,
                     null,
+                    List.of(),
+                    null,
                     null,
                     new ShipmentAgentPendingInterruptResponse(
                             ShipmentAgentInterruptType

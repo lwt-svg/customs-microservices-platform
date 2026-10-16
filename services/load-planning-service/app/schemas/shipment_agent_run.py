@@ -12,6 +12,9 @@ from app.models.shipment_agent_run import (
     ShipmentAgentAction,
     ShipmentAgentCapability,
     ShipmentAgentInterruptType,
+    ShipmentAgentNotificationSeverity,
+    ShipmentAgentNotificationStatus,
+    ShipmentAgentNotificationType,
     ShipmentAgentRunStatus,
     ShipmentAgentStage,
 )
@@ -178,6 +181,37 @@ class ShipmentAgentEventRead(BaseModel):
         return value.astimezone(UTC)
 
 
+class ShipmentAgentNotificationRead(BaseModel):
+    """页面和未来外部渠道共同消费的一条通知事实。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    notification_type: ShipmentAgentNotificationType
+    severity: ShipmentAgentNotificationSeverity
+    status: ShipmentAgentNotificationStatus
+    title: str
+    message: str
+    owner_role: str
+    action_context: dict[str, object]
+    occurrence_count: int
+    created_at: datetime
+    last_seen_at: datetime
+    resolved_at: datetime | None
+
+    @field_validator("created_at", "last_seen_at", "resolved_at")
+    @classmethod
+    def normalize_notification_timestamps(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
 class ShipmentAgentRunRead(BaseModel):
     """总 Agent 页面、Agent Center 和 BFF 共用的完整运行视图。"""
 
@@ -209,14 +243,16 @@ class ShipmentAgentRunRead(BaseModel):
     allowed_actions: list[ShipmentAgentAction]
     child_agent: ShipmentAgentChildRead | None
     next_wake_at: datetime | None = None
+    wake_reason: str | None = None
     failure_code: str | None
     failure_message: str | None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
     events: list[ShipmentAgentEventRead]
+    notifications: list[ShipmentAgentNotificationRead]
 
-    @field_validator("created_at", "updated_at", "completed_at")
+    @field_validator("next_wake_at", "created_at", "updated_at", "completed_at")
     @classmethod
     def normalize_timestamps(
         cls,

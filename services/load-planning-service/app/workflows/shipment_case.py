@@ -18,6 +18,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.shipment_agent_run import (
+    SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON,
     ShipmentAgentRunStatus,
     ShipmentAgentStage,
 )
@@ -27,6 +28,7 @@ from app.schemas.shipment_agent_run import (
     ShipmentAgentRunRead,
     ShipmentAgentStart,
 )
+from app.services.shipment_agent_automation import ShipmentAgentAutomationService
 from app.services.shipment_agent_runs import (
     SHIPMENT_AGENT_WORKFLOW_VERSION,
     ShipmentAgentService,
@@ -264,8 +266,10 @@ class ShipmentWorkflowOrchestrator:
         *,
         service: ShipmentAgentService,
         checkpointer: BaseCheckpointSaver[Any],
+        automation: ShipmentAgentAutomationService | None = None,
     ) -> None:
         self.service = service
+        self.automation = automation or ShipmentAgentAutomationService(service.session_factory)
         self.graph = build_shipment_workflow(
             service=service,
             checkpointer=checkpointer,
@@ -287,6 +291,7 @@ class ShipmentWorkflowOrchestrator:
     ) -> ShipmentAgentRunRead:
         run = await self.service.start(case_number, payload, idempotency_key)
         await self.synchronize(run.run_id)
+        await self.automation.project(run.run_id)
         return await self.service.get(run.run_id)
 
     async def synchronize(self, run_id: str) -> None:
@@ -326,6 +331,7 @@ class ShipmentWorkflowOrchestrator:
             # 必须返回已经成功的命令；全新的非法动作仍会被 allowed_actions 拒绝。
             await self.service.resume(run_id, payload, idempotency_key)
             await self.synchronize(run_id)
+        await self.automation.project(run_id)
         return await self.service.get(run_id)
 
     async def reconcile(
@@ -336,4 +342,62 @@ class ShipmentWorkflowOrchestrator:
     ) -> ShipmentAgentRunRead:
         await self.service.reconcile(run_id, payload, idempotency_key)
         await self.synchronize(run_id)
+        await self.automation.project(run_id)
+        return await self.service.get(run_id)
+
+    async def automatic_wake(self, run_id: str) -> ShipmentAgentRunRead:
+        """由数据库租约 Worker 观察等待状态，并在真实变化后继续 LangGraph。
+
+        与人工 ``reconcile`` 不同，本入口不写命令台账、不把等待状态先强行改成 RUNNING，
+        因而普通轮询没有发现变化时不会增加 run_version 或 Trace。提交 LINK 和重试 DEAD
+        仍只能通过人工 interrupt 批准。
+        """
+
+        current = await self.service.get(run_id)
+        changed = current
+
+        if current.wake_reason == SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON:
+            # 该 reason 只表示“业务事实已提交，但通知/下次唤醒投影可能未提交”。尤其当
+            # 当前状态是 WAITING_HUMAN 或终态时，Worker 绝不能据此恢复业务 Graph；
+            # 返回当前事实后，调用方只会执行 automation.project 并清除修复标记。
+            return current
+
+        if current.status is ShipmentAgentRunStatus.RUNNING:
+            await self.synchronize(run_id)
+            return await self.service.get(run_id)
+
+        if (
+            current.status is ShipmentAgentRunStatus.WAITING_EXTERNAL
+            and current.current_stage is ShipmentAgentStage.AWAITING_BOOKING_RESULT
+        ):
+            changed = await self.service.coordinate_booking(
+                run_id,
+                allow_waiting_poll=True,
+            )
+        elif (
+            current.status is ShipmentAgentRunStatus.WAITING_RESOURCE
+            and current.current_stage
+            in {
+                ShipmentAgentStage.AWAITING_LOAD_CONSTRAINTS,
+                ShipmentAgentStage.AWAITING_LOAD_REVIEW,
+                ShipmentAgentStage.AWAITING_LOAD_RELEASE,
+                ShipmentAgentStage.AWAITING_LOAD_REPLAN,
+            }
+        ):
+            changed = await self.service.coordinate_load(
+                run_id,
+                allow_waiting_poll=True,
+            )
+        elif (
+            current.status is ShipmentAgentRunStatus.WAITING_RESOURCE
+            and current.current_stage
+            in {
+                ShipmentAgentStage.AWAITING_RESOURCE_BINDING,
+                ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT,
+            }
+        ):
+            changed = await self.service.poll_waiting_resource(run_id)
+
+        if changed.status is ShipmentAgentRunStatus.RUNNING:
+            await self.synchronize(run_id)
         return await self.service.get(run_id)

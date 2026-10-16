@@ -520,6 +520,27 @@ export interface ShipmentAgentEvent {
   occurredAt: string
 }
 
+/** Shipment Agent 根据当前运行事实生成的一条站内业务通知。 */
+export interface ShipmentAgentNotification {
+  id: string
+  notificationType:
+    | 'ACTION_REQUIRED'
+    | 'RESOURCE_ATTENTION'
+    | 'EXTERNAL_WAIT'
+    | 'RUN_FAILED'
+    | 'AUTO_WAKE_FAILED'
+  severity: 'INFO' | 'WARNING' | 'ERROR'
+  status: 'OPEN' | 'RESOLVED'
+  title: string
+  message: string
+  ownerRole: string
+  actionContext: Record<string, unknown>
+  occurrenceCount: number
+  createdAt: string
+  lastSeenAt: string
+  resolvedAt: string | null
+}
+
 /** 装载子 Agent 的最小只读投影；候选方案和 3D 坐标仍由专业工作台负责。 */
 export interface ShipmentAgentChild {
   runId: string
@@ -563,6 +584,7 @@ export interface ShipmentAgentRun {
   bookingSubmissionUncertain: boolean
   dataReadiness: ShipmentDataReadiness | null
   nextWakeAt: string | null
+  wakeReason: string | null
   failureCode: string | null
   failureMessage: string | null
   pendingInterrupt: ShipmentAgentInterrupt | null
@@ -572,6 +594,7 @@ export interface ShipmentAgentRun {
   updatedAt: string
   completedAt: string | null
   events: ShipmentAgentEvent[]
+  notifications: ShipmentAgentNotification[]
 }
 
 export interface StartShipmentAgentRunInput {

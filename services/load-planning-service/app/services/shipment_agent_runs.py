@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -24,6 +24,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.integrations.shipment_agent_resources import (
     LinkBookingGateway,
     LinkBookingNotFoundError,
@@ -35,6 +36,7 @@ from app.integrations.shipment_agent_resources import (
 from app.integrations.shipment_resources import ShipmentResourceVerifier
 from app.models.agent_run import AgentRunStatus
 from app.models.shipment_agent_run import (
+    SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON,
     ShipmentAgentAction,
     ShipmentAgentCapability,
     ShipmentAgentCommand,
@@ -68,6 +70,7 @@ from app.schemas.shipment_agent_run import (
     ShipmentAgentChildRead,
     ShipmentAgentEventRead,
     ShipmentAgentInterruptRead,
+    ShipmentAgentNotificationRead,
     ShipmentAgentReconcile,
     ShipmentAgentResume,
     ShipmentAgentRunRead,
@@ -144,6 +147,14 @@ class ShipmentAgentValidationError(Exception):
     """JSON 类型有效，但不满足当前 interrupt 的业务合同。"""
 
 
+class ShipmentAgentTransientDependencyError(Exception):
+    """自动唤醒只读检查遇到的暂时性依赖故障。
+
+    人工请求首次遇到 LINK 故障时仍会把运行投影为 ``WAITING_EXTERNAL``；后台自动检查
+    再遇到同类故障则抛出本异常，由 Worker 做指数退避，避免固定频率持续打满依赖服务。
+    """
+
+
 def _canonical_hash(value: dict[str, object]) -> str:
     canonical = json.dumps(
         value,
@@ -181,10 +192,17 @@ class ShipmentAgentService:
         session_factory: async_sessionmaker[AsyncSession],
         link_gateway: LinkBookingGateway,
         checkpointer: BaseCheckpointSaver[Any],
+        *,
+        running_recovery_seconds: float | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.link_gateway = link_gateway
         self.checkpointer = checkpointer
+        self.running_recovery_seconds = (
+            running_recovery_seconds
+            if running_recovery_seconds is not None
+            else settings.shipment_agent_wake_recovery_grace_seconds
+        )
         # ShipmentCaseService 的状态变更路径不会调用资源验证器。这里仍显式传入空派发器，
         # 复用案件既有的幂等、revision 和审计实现，而不是绕过它直接 UPDATE 主表。
         self.case_service = ShipmentCaseService(
@@ -288,6 +306,7 @@ class ShipmentAgentService:
                         start_idempotency_key_hash=key_hash,
                         start_request_hash=request_hash,
                     )
+                    self._refresh_automatic_wake_marker(run)
                     run.events.append(
                         self._event(
                             run,
@@ -484,6 +503,7 @@ class ShipmentAgentService:
                         # 不修改业务阶段、不增加 run_version，也不追加一条容易误导业务的
                         # “重新检查”事件。事务只持久化幂等命令；提交后 Orchestrator 的
                         # synchronize 会根据当前 RUNNING 阶段恢复自动执行。
+                        self._refresh_automatic_wake_marker(run)
                         repository.add(
                             ShipmentAgentCommand(
                                 run_id=run.id,
@@ -516,6 +536,7 @@ class ShipmentAgentService:
                                 run,
                                 payload,
                             )
+                        self._refresh_automatic_wake_marker(run)
                         run.run_version += 1
                         event = self._event(
                             run,
@@ -984,6 +1005,18 @@ class ShipmentAgentService:
         ``RECHECK``。
         """
 
+        await self._commit_data_readiness_assessment(run_id)
+        # 统一在事务完整提交后重新读取。两个 FAILED 早退分支也会更新数据库维护的
+        # updated_at；若在 flush 后同步序列化 ORM 对象，会触发 AsyncSession 无法执行的
+        # 隐式 I/O（MissingGreenlet）。
+        return await self.get(run_id)
+
+    async def _commit_data_readiness_assessment(
+        self,
+        run_id: str,
+    ) -> None:
+        """在一个短事务中提交数据就绪度业务事实，不在事务内构造返回 DTO。"""
+
         async with self.session_factory() as session:
             run_repository = ShipmentAgentRunRepository(session)
             readiness_repository = ShipmentDataReadinessRepository(session)
@@ -995,7 +1028,7 @@ class ShipmentAgentService:
                     run.status is not ShipmentAgentRunStatus.RUNNING
                     or run.current_stage is not ShipmentAgentStage.ASSESSING_DATA_READINESS
                 ):
-                    return self._to_read(run)
+                    return
 
                 capabilities = set(run.required_capabilities)
                 needs_load = ShipmentAgentCapability.LOAD_PLANNING.value in capabilities
@@ -1022,8 +1055,9 @@ class ShipmentAgentService:
                                 data={"failure_code": "LOAD_RESOURCE_MISSING"},
                             )
                         )
+                        self._refresh_automatic_wake_marker(run)
                         await run_repository.flush()
-                        return self._to_read(run)
+                        return
                     task = await readiness_repository.get_load_task(run.selected_load_task_number)
                     if task is None:
                         run.status = ShipmentAgentRunStatus.FAILED
@@ -1044,8 +1078,9 @@ class ShipmentAgentService:
                                 data={"failure_code": "LOAD_TASK_NOT_FOUND"},
                             )
                         )
+                        self._refresh_automatic_wake_marker(run)
                         await run_repository.flush()
-                        return self._to_read(run)
+                        return
 
                 readiness = await readiness_repository.get_for_case(
                     run.case_id,
@@ -1199,20 +1234,41 @@ class ShipmentAgentService:
                         },
                     )
                 )
+                self._refresh_automatic_wake_marker(run)
                 await run_repository.flush()
 
-        return await self.get(run_id)
+    async def coordinate_load(
+        self,
+        run_id: str,
+        *,
+        allow_waiting_poll: bool = False,
+    ) -> ShipmentAgentRunRead:
+        """读取正式版本；必要时幂等启动或恢复装载子 Agent。
 
-    async def coordinate_load(self, run_id: str) -> ShipmentAgentRunRead:
-        """读取正式版本；必要时幂等启动或恢复装载子 Agent。"""
+        普通 LangGraph 节点只处理 ``RUNNING + STARTING_LOAD_AGENT``。后台 Worker 可以在
+        ``allow_waiting_poll`` 下观察装载人工节点是否已经产生正式版本；若仍无变化，
+        ``_mutate`` 返回 False，不增加 run_version、Trace 或通知。
+        """
 
         current = await self._get_orm_snapshot(run_id)
         expected_version = current.run_version
         task_number = current.selected_load_task_number
-        if (
-            current.status is not ShipmentAgentRunStatus.RUNNING
-            or current.current_stage is not ShipmentAgentStage.STARTING_LOAD_AGENT
-        ):
+        running_start = (
+            current.status is ShipmentAgentRunStatus.RUNNING
+            and current.current_stage is ShipmentAgentStage.STARTING_LOAD_AGENT
+        )
+        waiting_poll = (
+            allow_waiting_poll
+            and current.status is ShipmentAgentRunStatus.WAITING_RESOURCE
+            and current.current_stage
+            in {
+                ShipmentAgentStage.AWAITING_LOAD_CONSTRAINTS,
+                ShipmentAgentStage.AWAITING_LOAD_REVIEW,
+                ShipmentAgentStage.AWAITING_LOAD_RELEASE,
+                ShipmentAgentStage.AWAITING_LOAD_REPLAN,
+            }
+        )
+        if not running_start and not waiting_poll:
             return self._to_read(current)
         if not task_number:
             return await self._set_running_stage(
@@ -1338,16 +1394,31 @@ class ShipmentAgentService:
             data={"child_agent": child_snapshot},
         )
 
-    async def coordinate_booking(self, run_id: str) -> ShipmentAgentRunRead:
-        """读取 LINK 权威状态，并选择提交、等待、重试或替换分支。"""
+    async def coordinate_booking(
+        self,
+        run_id: str,
+        *,
+        allow_waiting_poll: bool = False,
+    ) -> ShipmentAgentRunRead:
+        """读取 LINK 权威状态，并选择提交、等待、重试或替换分支。
+
+        后台 Worker 只允许从 ``WAITING_EXTERNAL`` 做 GET 核对，绝不会自动调用提交或
+        DEAD 重试。状态未变化时不产生新的业务事件。
+        """
 
         current = await self._get_orm_snapshot(run_id)
         expected_version = current.run_version
         application_number = current.selected_booking_application_number
-        if (
-            current.status is not ShipmentAgentRunStatus.RUNNING
-            or current.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_RESULT
-        ):
+        running_check = (
+            current.status is ShipmentAgentRunStatus.RUNNING
+            and current.current_stage is ShipmentAgentStage.AWAITING_BOOKING_RESULT
+        )
+        waiting_poll = (
+            allow_waiting_poll
+            and current.status is ShipmentAgentRunStatus.WAITING_EXTERNAL
+            and current.current_stage is ShipmentAgentStage.AWAITING_BOOKING_RESULT
+        )
+        if not running_check and not waiting_poll:
             return self._to_read(current)
         if not application_number:
             return await self._set_running_stage(
@@ -1367,6 +1438,8 @@ class ShipmentAgentService:
                 "当前 LINK 申请已不存在，请绑定并选择替代申请。",
             )
         except (LinkBookingUnavailableError, LinkBookingProtocolError) as error:
+            if allow_waiting_poll:
+                raise ShipmentAgentTransientDependencyError("LINK 状态暂时无法读取") from error
             return await self._wait_for_booking_reconciliation(
                 run_id,
                 expected_version,
@@ -1377,12 +1450,15 @@ class ShipmentAgentService:
         if snapshot.application_status == "CONFIRMED":
 
             def record_confirmed(run: ShipmentAgentRun) -> bool:
+                snapshot_changed = self._copy_link_snapshot(run, snapshot)
                 changed = (
-                    run.booking_status != "CONFIRMED"
-                    or run.booking_reference != snapshot.booking_reference
+                    snapshot_changed
+                    or run.booking_submission_uncertain
                     or run.status is not ShipmentAgentRunStatus.RUNNING
+                    or run.current_stage is not ShipmentAgentStage.SYNCING_CASE
+                    or run.pending_interrupt is not None
+                    or run.allowed_actions != []
                 )
-                self._copy_link_snapshot(run, snapshot)
                 run.booking_submission_uncertain = False
                 run.status = ShipmentAgentRunStatus.RUNNING
                 run.current_stage = ShipmentAgentStage.SYNCING_CASE
@@ -1459,6 +1535,52 @@ class ShipmentAgentService:
             f"暂不识别 LINK 状态 {snapshot.application_status}，请人工核对。",
             snapshot=snapshot,
         )
+
+    async def poll_waiting_resource(self, run_id: str) -> ShipmentAgentRunRead:
+        """观察资源绑定类等待；没有新候选时保持完全无副作用。
+
+        该入口只用于后台 Worker。它不会自动替业务人员选择多个候选：初次缺少资源时，
+        发现绑定后回到 ``SYNCING_CASE``，随后仍由既有策略执行“唯一候选自动选择 / 多候选
+        人工选择”；替代 LINK 申请出现后则进入明确的人工选择节点。
+        """
+
+        current = await self._get_orm_snapshot(run_id)
+        if current.status is not ShipmentAgentRunStatus.WAITING_RESOURCE:
+            return self._to_read(current)
+
+        if current.current_stage is ShipmentAgentStage.AWAITING_RESOURCE_BINDING:
+            requirement = self._first_unselected_resource(current)
+            if requirement is None or not requirement[1]:
+                return self._to_read(current)
+            resource_type, candidates = requirement
+            return await self._set_running_stage(
+                run_id,
+                current.run_version,
+                ShipmentAgentStage.SYNCING_CASE,
+                "RESOURCE_BINDING_DETECTED",
+                "检测到新的业务资源",
+                (f"已发现 {len(candidates)} 个 {resource_type.value} 候选，将按既有选择策略继续。"),
+            )
+
+        if current.current_stage is ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT:
+            candidates = [
+                binding.resource_number
+                for binding in current.shipment_case.resource_bindings
+                if (
+                    binding.resource_type is ShipmentResourceType.LINK_BOOKING_APPLICATION
+                    and binding.resource_number != current.selected_booking_application_number
+                )
+            ]
+            if not candidates:
+                return self._to_read(current)
+            return await self._request_booking_replacement(
+                current,
+                "已检测到新的 LINK 申请，请确认本票实际使用的替代申请。",
+                link_status=current.booking_status,
+                carrier_status=current.carrier_submission_status,
+            )
+
+        return self._to_read(current)
 
     async def activate_case(self, run_id: str) -> ShipmentAgentRunRead:
         """在人工批准后通过既有 Shipment Case 状态机激活案件。"""
@@ -1676,14 +1798,14 @@ class ShipmentAgentService:
         }
 
         def mutate(run: ShipmentAgentRun) -> bool:
+            snapshot_changed = self._copy_link_snapshot(run, snapshot)
             changed = (
-                run.pending_interrupt != pending
+                snapshot_changed
+                or run.pending_interrupt != pending
                 or run.current_stage is not stage
                 or run.status is not ShipmentAgentRunStatus.WAITING_HUMAN
-                or run.booking_status != snapshot.application_status
-                or run.carrier_submission_status != snapshot.carrier_status
+                or run.allowed_actions != [value.value for value in allowed]
             )
-            self._copy_link_snapshot(run, snapshot)
             run.status = ShipmentAgentRunStatus.WAITING_HUMAN
             run.current_stage = stage
             run.pending_interrupt = pending
@@ -1706,13 +1828,19 @@ class ShipmentAgentService:
         snapshot,
     ) -> ShipmentAgentRunRead:
         def mutate(run: ShipmentAgentRun) -> bool:
+            snapshot_changed = self._copy_link_snapshot(run, snapshot)
             changed = (
-                run.status is not ShipmentAgentRunStatus.WAITING_EXTERNAL
+                snapshot_changed
+                or run.booking_submission_uncertain
+                or run.status is not ShipmentAgentRunStatus.WAITING_EXTERNAL
                 or run.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_RESULT
-                or run.booking_status != snapshot.application_status
-                or run.carrier_submission_status != snapshot.carrier_status
+                or run.pending_interrupt is not None
+                or run.allowed_actions
+                != [
+                    ShipmentAgentAction.RECHECK.value,
+                    ShipmentAgentAction.STOP.value,
+                ]
             )
-            self._copy_link_snapshot(run, snapshot)
             run.booking_submission_uncertain = False
             run.status = ShipmentAgentRunStatus.WAITING_EXTERNAL
             run.current_stage = ShipmentAgentStage.AWAITING_BOOKING_RESULT
@@ -1756,6 +1884,10 @@ class ShipmentAgentService:
             )
         ]
         if not candidates:
+            allowed_actions = [
+                ShipmentAgentAction.RECHECK.value,
+                ShipmentAgentAction.STOP.value,
+            ]
 
             def wait_for_binding(run: ShipmentAgentRun) -> bool:
                 changed = (
@@ -1763,16 +1895,15 @@ class ShipmentAgentService:
                     or run.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT
                     or run.booking_status != link_status
                     or run.carrier_submission_status != carrier_status
+                    or run.pending_interrupt is not None
+                    or run.allowed_actions != allowed_actions
                 )
                 run.booking_status = link_status
                 run.carrier_submission_status = carrier_status
                 run.status = ShipmentAgentRunStatus.WAITING_RESOURCE
                 run.current_stage = ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT
                 run.pending_interrupt = None
-                run.allowed_actions = [
-                    ShipmentAgentAction.RECHECK.value,
-                    ShipmentAgentAction.STOP.value,
-                ]
+                run.allowed_actions = allowed_actions
                 return changed
 
             return await self._mutate(
@@ -1803,22 +1934,27 @@ class ShipmentAgentService:
                 "rejected_resource": (current.selected_booking_application_number),
             },
         }
+        allowed_actions = [
+            ShipmentAgentAction.SELECT.value,
+            ShipmentAgentAction.RECHECK.value,
+            ShipmentAgentAction.STOP.value,
+        ]
 
         def mutate(run: ShipmentAgentRun) -> bool:
             changed = (
-                run.pending_interrupt != pending
+                run.booking_status != link_status
+                or run.carrier_submission_status != carrier_status
+                or run.status is not ShipmentAgentRunStatus.WAITING_HUMAN
                 or run.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT
+                or run.pending_interrupt != pending
+                or run.allowed_actions != allowed_actions
             )
             run.booking_status = link_status
             run.carrier_submission_status = carrier_status
             run.status = ShipmentAgentRunStatus.WAITING_HUMAN
             run.current_stage = ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT
             run.pending_interrupt = pending
-            run.allowed_actions = [
-                *([ShipmentAgentAction.SELECT.value] if candidates else []),
-                ShipmentAgentAction.RECHECK.value,
-                ShipmentAgentAction.STOP.value,
-            ]
+            run.allowed_actions = allowed_actions
             return changed
 
         return await self._mutate(
@@ -1881,13 +2017,29 @@ class ShipmentAgentService:
         snapshot=None,
     ) -> ShipmentAgentRunRead:
         def mutate(run: ShipmentAgentRun) -> bool:
-            changed = (
-                run.status is not ShipmentAgentRunStatus.WAITING_EXTERNAL
-                or run.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_RESULT
-                or run.failure_code != error_code
-            )
+            snapshot_changed = False
             if snapshot is not None:
-                self._copy_link_snapshot(run, snapshot)
+                # 本分支最终要保留当前 reconciliation 错误，不能先把旧错误清空再据此
+                # 判断变化，否则完全相同的轮询也会被误记为一次新事件。
+                snapshot_changed = self._copy_link_snapshot(
+                    run,
+                    snapshot,
+                    clear_failure=False,
+                )
+            failure_message = message[:2_000]
+            changed = (
+                snapshot_changed
+                or run.status is not ShipmentAgentRunStatus.WAITING_EXTERNAL
+                or run.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_RESULT
+                or run.pending_interrupt is not None
+                or run.allowed_actions
+                != [
+                    ShipmentAgentAction.RECHECK.value,
+                    ShipmentAgentAction.STOP.value,
+                ]
+                or run.failure_code != error_code
+                or run.failure_message != failure_message
+            )
             run.status = ShipmentAgentRunStatus.WAITING_EXTERNAL
             run.current_stage = ShipmentAgentStage.AWAITING_BOOKING_RESULT
             run.pending_interrupt = None
@@ -1896,7 +2048,7 @@ class ShipmentAgentService:
                 ShipmentAgentAction.STOP.value,
             ]
             run.failure_code = error_code
-            run.failure_message = message[:2_000]
+            run.failure_message = failure_message
             return changed
 
         return await self._mutate(
@@ -2159,6 +2311,7 @@ class ShipmentAgentService:
                     return self._to_read(run)
                 changed = mutate(run)
                 if changed:
+                    self._refresh_automatic_wake_marker(run)
                     run.run_version += 1
                     run.events.append(
                         self._event(
@@ -2172,6 +2325,29 @@ class ShipmentAgentService:
                     )
                     await repository.flush()
         return await self.get(run_id)
+
+    def _refresh_automatic_wake_marker(
+        self,
+        run: ShipmentAgentRun,
+    ) -> None:
+        """给每次业务事实提交写入一条有期限的控制面恢复标记。
+
+        ``RUNNING`` 使用 ``RECOVER_RUNNING_STEP``，允许 Graph 在 HTTP 进程崩溃后从
+        当前阶段幂等继续。其他状态使用 ``REPAIR_CONTROL_PROJECTION``：正常
+        ``automation.project`` 会立即把它清除，或改成真正的 POLL 计划；只有业务事务
+        已提交、进程却在投影前崩溃时，Worker 才会在宽限期后领取它，并且只补通知和
+        下一次唤醒计划，不执行人工动作。
+        """
+
+        next_recovery_at = _utc_now_for_database() + timedelta(
+            seconds=self.running_recovery_seconds
+        )
+        if run.status is ShipmentAgentRunStatus.RUNNING:
+            run.next_wake_at = next_recovery_at
+            run.wake_reason = "RECOVER_RUNNING_STEP"
+            return
+        run.next_wake_at = next_recovery_at
+        run.wake_reason = SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON
 
     async def _get_orm_snapshot(self, run_id: str) -> ShipmentAgentRun:
         async with self.session_factory() as session:
@@ -2289,12 +2465,36 @@ class ShipmentAgentService:
         return None
 
     @staticmethod
-    def _copy_link_snapshot(run: ShipmentAgentRun, snapshot) -> None:
-        run.booking_status = snapshot.application_status
-        run.carrier_submission_status = snapshot.carrier_status
-        run.booking_reference = snapshot.booking_reference
-        run.failure_code = None
-        run.failure_message = None
+    def _copy_link_snapshot(
+        run: ShipmentAgentRun,
+        snapshot,
+        *,
+        clear_failure: bool = True,
+    ) -> bool:
+        """复制 LINK 权威快照，并返回是否真的改变了持久化业务字段。
+
+        ``_mutate`` 在回调返回 ``False`` 时不会增加 run_version 和 Trace，但 SQLAlchemy
+        事务仍可能自动 flush 已赋的新值。因此调用方必须把本方法的返回值并入自己的
+        ``changed`` 判定，避免“数据库字段已经变了，版本和审计轨迹却没变”的静默写入。
+        reconciliation 分支可关闭错误清理，因为它会在同一事务写入新的错误投影。
+        """
+
+        values = {
+            "booking_status": snapshot.application_status,
+            "carrier_submission_status": snapshot.carrier_status,
+            "booking_reference": snapshot.booking_reference,
+        }
+        if clear_failure:
+            values.update(
+                {
+                    "failure_code": None,
+                    "failure_message": None,
+                }
+            )
+        changed = any(getattr(run, field) != value for field, value in values.items())
+        for field, value in values.items():
+            setattr(run, field, value)
+        return changed
 
     async def _recover_start(
         self,
@@ -2418,7 +2618,8 @@ class ShipmentAgentService:
             pending_interrupt=pending,
             allowed_actions=[ShipmentAgentAction(value) for value in run.allowed_actions],
             child_agent=child,
-            next_wake_at=None,
+            next_wake_at=run.next_wake_at,
+            wake_reason=run.wake_reason,
             failure_code=run.failure_code,
             failure_message=run.failure_message,
             created_at=run.created_at,
@@ -2450,5 +2651,9 @@ class ShipmentAgentService:
                     occurred_at=event.occurred_at,
                 )
                 for event in run.events
+            ],
+            notifications=[
+                ShipmentAgentNotificationRead.model_validate(notification)
+                for notification in run.notifications
             ],
         )

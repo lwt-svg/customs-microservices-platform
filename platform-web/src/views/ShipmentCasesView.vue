@@ -293,13 +293,13 @@ onMounted(loadCases)
     <section class="panel shipment-list-panel">
       <div class="shipment-list-heading">
         <div>
-          <span>SHIPMENT CASE QUEUE</span>
+          <span>发运案件</span>
           <h3>案件队列</h3>
           <p>显示 {{ filteredCases.length }} / {{ shipmentCases.length }} 条案件</p>
         </div>
         <span class="shipment-service-state" :class="{ error: Boolean(loadError) }">
           <i></i>
-          {{ loadError ? '数据同步异常' : 'Agent Runtime 已连接' }}
+          {{ loadError ? '数据同步异常' : '案件数据已同步' }}
         </span>
       </div>
 
@@ -352,7 +352,7 @@ onMounted(loadCases)
       <div v-if="loading && shipmentCases.length === 0" class="empty-state">
         <span class="loading-ring"></span>
         <strong>正在同步发运案件</strong>
-        <p>正在通过 Java BFF 读取 Agent Runtime 中的案件快照。</p>
+        <p>正在读取案件、专业作业和最新状态，请稍候。</p>
       </div>
 
       <div

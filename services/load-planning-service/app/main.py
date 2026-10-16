@@ -1,5 +1,6 @@
 """智能装载 FastAPI 微服务入口。"""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -16,9 +17,32 @@ from app.api.plan_versions import router as plan_versions_router
 from app.api.shipment_agent_runs import router as shipment_agent_runs_router
 from app.api.shipment_cases import router as shipment_cases_router
 from app.core.config import settings
+from app.db.session import SessionLocal
 from app.integrations.nacos_registry import NacosServiceRegistry
+from app.integrations.shipment_agent_resources import HttpLinkBookingClient
+from app.services.shipment_agent_automation import ShipmentAgentAutomationService
+from app.services.shipment_agent_runs import ShipmentAgentService
+from app.workers.shipment_agent_wake_worker import ShipmentAgentWakeWorker
+from app.workflows.shipment_case import ShipmentWorkflowOrchestrator
 
 logger = logging.getLogger("uvicorn.error")
+
+
+async def _stop_wake_worker(
+    worker: ShipmentAgentWakeWorker,
+    task: asyncio.Task[None],
+) -> None:
+    """先请求优雅停止；超时后取消任务，未完成租约会在数据库中自动过期。"""
+
+    worker.stop()
+    try:
+        await asyncio.wait_for(task, timeout=5)
+    except TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 @asynccontextmanager
@@ -51,6 +75,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else:
             app.state.load_planning_checkpointer = None
             logger.info("LangGraph 编排已关闭，写请求使用原有 Service 路径。")
+
+        if (
+            settings.shipment_agent_wake_worker_enabled
+            and app.state.load_planning_checkpointer is not None
+        ):
+            automation = ShipmentAgentAutomationService(SessionLocal)
+            shipment_service = ShipmentAgentService(
+                SessionLocal,
+                HttpLinkBookingClient(
+                    settings.link_booking_internal_base_url,
+                    timeout_seconds=(settings.shipment_resource_verify_timeout_seconds),
+                ),
+                app.state.load_planning_checkpointer,
+            )
+            shipment_workflow = ShipmentWorkflowOrchestrator(
+                service=shipment_service,
+                checkpointer=app.state.load_planning_checkpointer,
+                automation=automation,
+            )
+            wake_worker = ShipmentAgentWakeWorker(
+                automation=automation,
+                orchestrator=shipment_workflow,
+                poll_seconds=settings.shipment_agent_wake_poll_seconds,
+                batch_size=settings.shipment_agent_wake_batch_size,
+            )
+            wake_task = asyncio.create_task(
+                wake_worker.run_forever(),
+                name="shipment-agent-wake-worker",
+            )
+            app.state.shipment_agent_wake_worker = wake_worker
+            stack.push_async_callback(
+                _stop_wake_worker,
+                wake_worker,
+                wake_task,
+            )
+        else:
+            app.state.shipment_agent_wake_worker = None
+            logger.info("Shipment Agent 自动唤醒器已关闭。")
 
         registry: NacosServiceRegistry | None = None
         if settings.nacos_discovery_enabled:

@@ -478,6 +478,8 @@ public class ShipmentAgentRunService {
             @JsonProperty("data_readiness")
             RemoteDataReadiness dataReadiness,
             @JsonProperty("next_wake_at") String nextWakeAt,
+            @JsonProperty("wake_reason") String wakeReason,
+            List<RemoteAgentNotification> notifications,
             @JsonProperty("failure_code") String failureCode,
             @JsonProperty("failure_message") String failureMessage,
             @JsonProperty("pending_interrupt")
@@ -526,6 +528,12 @@ public class ShipmentAgentRunService {
                             ? null
                             : dataReadiness.toPlatformResponse(),
                     nextWakeAt,
+                    wakeReason,
+                    notifications == null
+                            ? List.of()
+                            : notifications.stream()
+                                    .map(RemoteAgentNotification::toPlatformResponse)
+                                    .toList(),
                     failureCode,
                     failureMessage,
                     pendingInterrupt == null
@@ -751,6 +759,39 @@ public class ShipmentAgentRunService {
                     currentStep,
                     runVersion,
                     nextAction);
+        }
+    }
+
+    /** Python 返回的去重站内通知。 */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record RemoteAgentNotification(
+            String id,
+            @JsonProperty("notification_type") String notificationType,
+            String severity,
+            String status,
+            String title,
+            String message,
+            @JsonProperty("owner_role") String ownerRole,
+            @JsonProperty("action_context") Map<String, Object> actionContext,
+            @JsonProperty("occurrence_count") int occurrenceCount,
+            @JsonProperty("created_at") String createdAt,
+            @JsonProperty("last_seen_at") String lastSeenAt,
+            @JsonProperty("resolved_at") String resolvedAt) {
+
+        private ShipmentAgentNotificationResponse toPlatformResponse() {
+            return new ShipmentAgentNotificationResponse(
+                    id,
+                    notificationType,
+                    severity,
+                    status,
+                    title,
+                    message,
+                    ownerRole,
+                    immutableDetails(actionContext),
+                    occurrenceCount,
+                    createdAt,
+                    lastSeenAt,
+                    resolvedAt);
         }
     }
 

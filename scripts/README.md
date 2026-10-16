@@ -296,13 +296,20 @@ Java BFF 创建装载任务、LINK 草稿和 SEA_FCL Shipment Case
 → 人工批准案件激活
 → 总 Agent 幂等启动装载子 Agent
 → 批准可行装载方案并发布不可变 LOCKED V1
-→ reconcile 后人工批准 LINK 提交
+→ 8200 内置 Worker 自动发现 LOCKED V1，再人工批准 LINK 提交
 → 总 Agent 进入 WAITING_EXTERNAL，不占线程等待承运人
 → 本机模拟承运人开始处理并确认
 → CONFIRMED 回调写回 LINK
-→ 显式 reconcile 后人工批准结案
+→ Worker 自动发现 LINK 终态，再人工批准结案
 → 复核案件、Agent Center、运行历史、active=null 和完整 Trace
 ```
+
+E2E 在两个自动等待阶段只做有上限的 GET 轮询，并断言等待时存在 `nextWakeAt`、进入人工
+审批点后该字段已经清空。自动唤醒 Worker 随 8200 FastAPI 进程启动，正常租期内同一运行
+只允许一个实例领取；失租接管时，租约 token 会拒绝旧实例的迟到投影，业务版本和下游
+幂等再保护实际副作用。无变化检查不会增加运行版本、Trace 或重复通知，暂时性故障会指数
+退避。因此不需要新增 Redis、Celery、Kafka、端口或启动命令。显式 `reconcile` API 仍保留
+为页面“立即检查（故障兜底）”，不再是正常 E2E 的必经步骤。
 
 业务资源、Shipment Case、装载子 Agent 与 Shipment 总 Agent 都只通过
 `http://127.0.0.1:8080/api/v1/platform/*` 访问。只有模拟“承运人员工点击处理与确认”

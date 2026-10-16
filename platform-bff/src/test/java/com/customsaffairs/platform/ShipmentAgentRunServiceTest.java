@@ -84,6 +84,29 @@ class ShipmentAgentRunServiceTest {
         assertThat(response.scenarioPolicyConfirmed()).isTrue();
         assertThat(response.lockedLoadVersionNumber()).isEqualTo(2);
         assertThat(response.bookingSubmissionUncertain()).isFalse();
+        assertThat(response.wakeReason()).isNull();
+        assertThat(response.notifications()).hasSize(1);
+        var notification = response.notifications().getFirst();
+        assertThat(notification.id())
+                .isEqualTo("SHIP-NOTIFICATION-0001");
+        assertThat(notification.notificationType())
+                .isEqualTo("ACTION_REQUIRED");
+        assertThat(notification.severity()).isEqualTo("WARNING");
+        assertThat(notification.status()).isEqualTo("OPEN");
+        assertThat(notification.title()).isEqualTo("等待订舱业务员确认");
+        assertThat(notification.message())
+                .isEqualTo("LINK 草稿已准备完成，请确认是否提交。");
+        assertThat(notification.ownerRole()).isEqualTo("BOOKING_OPERATOR");
+        assertThat(notification.actionContext())
+                .containsEntry("run_id", "SHIP-RUN-0001")
+                .containsEntry("case_number", "SHP-DEMO-0001")
+                .containsEntry("stage", "AWAITING_BOOKING_SUBMIT_APPROVAL");
+        assertThat(notification.occurrenceCount()).isEqualTo(2);
+        assertThat(notification.createdAt())
+                .isEqualTo("2026-10-16T02:05:00Z");
+        assertThat(notification.lastSeenAt())
+                .isEqualTo("2026-10-16T02:10:00Z");
+        assertThat(notification.resolvedAt()).isNull();
         assertThat(response.dataReadiness().status())
                 .isEqualTo("ACTION_REQUIRED");
         assertThat(response.dataReadiness().revision()).isEqualTo(2);
@@ -120,6 +143,32 @@ class ShipmentAgentRunServiceTest {
                 .isEqualTo("演示操作员");
         assertThat(response.events().getFirst().resourceNumber())
                 .isEqualTo("LINK-DEMO-0001");
+        mockServer.verify();
+    }
+
+    @Test
+    void shouldMapNonNullAutomaticWakeSnakeCaseFields() {
+        mockServer.expect(once(), requestTo(
+                        "http://127.0.0.1:8010/api/v1/shipment-agent-runs/"
+                                + "SHIP-RUN-0001"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(
+                        runJson()
+                                .replace(
+                                        "\"next_wake_at\": null",
+                                        "\"next_wake_at\": "
+                                                + "\"2026-10-16T02:15:00Z\"")
+                                .replace(
+                                        "\"wake_reason\": null",
+                                        "\"wake_reason\": "
+                                                + "\"POLL_LINK_STATUS\""),
+                        MediaType.APPLICATION_JSON));
+
+        var response = service.getRun("SHIP-RUN-0001");
+
+        assertThat(response.nextWakeAt())
+                .isEqualTo("2026-10-16T02:15:00Z");
+        assertThat(response.wakeReason()).isEqualTo("POLL_LINK_STATUS");
         mockServer.verify();
     }
 
@@ -524,6 +573,25 @@ class ShipmentAgentRunServiceTest {
                     }]
                   },
                   "next_wake_at": null,
+                  "wake_reason": null,
+                  "notifications": [{
+                    "id": "SHIP-NOTIFICATION-0001",
+                    "notification_type": "ACTION_REQUIRED",
+                    "severity": "WARNING",
+                    "status": "OPEN",
+                    "title": "等待订舱业务员确认",
+                    "message": "LINK 草稿已准备完成，请确认是否提交。",
+                    "owner_role": "BOOKING_OPERATOR",
+                    "action_context": {
+                      "run_id": "SHIP-RUN-0001",
+                      "case_number": "SHP-DEMO-0001",
+                      "stage": "AWAITING_BOOKING_SUBMIT_APPROVAL"
+                    },
+                    "occurrence_count": 2,
+                    "created_at": "2026-10-16T02:05:00Z",
+                    "last_seen_at": "2026-10-16T02:10:00Z",
+                    "resolved_at": null
+                  }],
                   "failure_code": null,
                   "failure_message": null,
                   "pending_interrupt": {

@@ -33,13 +33,13 @@ customs-microservices-platform/
 ## 产品定位与当前能力
 
 项目定位正在从“关务页面 + 供应链页面”演进为统一的 TradeOps Agent Platform。平台以
-`Shipment Case` 作为跨业务案件主线，让文档、订舱、装载、人工确认、状态事件和后续
-智能编排围绕同一个业务对象协作。
+`Shipment Case` 作为跨业务案件主线，让文档、订舱、装载、人工确认、状态事件和智能编排
+围绕同一个业务对象协作。
 
 ```text
 Vue 企业工作台
   → Java Platform BFF：身份、权限、菜单、统一 API 和审计入口
-    → Python Agent Runtime：Shipment Case、装载 Agent、未来 RAG 与总编排
+    → Python Agent Runtime：Shipment Case 总 LangGraph、装载 Agent 与未来 RAG
     → LINK Python Service：订舱申请与七步业务
     → Carrier Simulator：本地异步承运人闭环
       → MySQL / Nacos
@@ -50,13 +50,14 @@ Vue 企业工作台
 - LINK 文档导入、人工复核、七步填单和模拟承运人异步闭环；
 - LangGraph 装载流程、确定性几何计算、三方案比较、3D 复核、审批和不可变正式版本；
 - Shipment Case 案件中心、资源绑定、事件时间线、并发控制和幂等命令台账；
+- Shipment Operations Agent 总 LangGraph：缺资料暂停、跨工具恢复、人工审批和完整 Trace；
+- V3 自动唤醒：数据库租约协调单实例领取、暂时故障指数退避和可自动恢复的站内业务通知；
 - Vue → Java BFF → Nacos → Python → MySQL 的真实本机调用链；
 - 一键启动、日志轮转、自动测试和端到端验收脚本。
 
 当前仍未完成：
 
 - 文档理解、字段证据、冲突检查和 RAG；
-- Shipment Case 级总 LangGraph、缺资料暂停和跨工具恢复；
 - 真实登录、案件级 RBAC 和可信用户上下文；
 - Agent 评测、生产可观测、告警、Ops Copilot、Kubernetes 与恢复演练。
 
@@ -132,7 +133,7 @@ docker compose --env-file .env.local exec -T mysql sh -c \
   "'
 ```
 
-Java BFF 启动时会由 Flyway 自动执行 `V1`–`V8`，不需要手工执行 Java SQL。
+Java BFF 启动时会由 Flyway 自动执行 `V1`–`V12`，不需要手工执行 Java SQL。
 确认 `.env.local` 里的 `LINK_DATABASE_URL` 指向 `link_booking_service` 后，再执行 Python
 迁移和测试：
 
@@ -324,6 +325,12 @@ Java BFF → Nacos → Python → MySQL，而不是只看端口。`load-planning
 
 LangGraph 的 SQLite Checkpointer 随智能装载 Python 进程自动打开，保存在 Git 忽略的
 `runtime/checkpoints/`，不增加新的端口或手工启动命令。
+
+Shipment Agent V3 的自动唤醒 Worker 也跟随同一个 8200 FastAPI 进程启停，不需要再启动
+Celery、Redis、Kafka 或另一条 Python 命令。正常租期内，同一运行只会被一个 Worker
+领取；若实例失租后发生接管，迟到投影会被租约 token 拒绝，业务步骤再由版本检查、命令
+幂等键和下游状态机共同防止重复副作用。等待状态没有变化时也不会增加业务版本、Trace
+或通知。显式 `reconcile` 仍保留为“立即检查（故障兜底）”，不是正常流程的必点步骤。
 
 `core/full` 脚本只用 Docker 启动 MySQL 与 Nacos，其他应用默认使用本机进程。曾经手工构建
 模拟承运人镜像时，下载 `python:3.12-slim` 遇到过 Docker Hub `EOF`；这是镜像下载连接中断，
