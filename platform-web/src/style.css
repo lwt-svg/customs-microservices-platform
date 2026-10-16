@@ -1817,7 +1817,7 @@ div.resource-row {
   background: #ffffff;
 }
 
-/* 第 23 章：沙丘 OS 双业务域门户。 */
+/* 第 23 章建立的双专业域页面；第 24 章后作为 TradeOps 的辅助能力目录保留。 */
 .portal-page,
 .load-planning-page {
   display: grid;
@@ -2068,7 +2068,7 @@ div.resource-row {
   line-height: 1.65;
 }
 
-/* 供应链 OS：装载规划概览。 */
+/* TradeOps 智能装载能力：装载规划概览。 */
 .load-planning-hero {
   display: grid;
   min-height: 320px;

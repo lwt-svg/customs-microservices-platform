@@ -424,6 +424,7 @@ class LoadPlanningAgentRunControllerTest {
                     1,
                     0,
                     new BigDecimal("0.82"),
+                    new BigDecimal("0.82"),
                     new BigDecimal("0.61"),
                     new BigDecimal("294"),
                     new BigDecimal("294"),
@@ -434,11 +435,22 @@ class LoadPlanningAgentRunControllerTest {
                         1,
                         "PALLET-1200X800",
                         new BigDecimal("294"),
+                        new BigDecimal("2.5"),
                         new BigDecimal("27.5"),
+                        1,
+                        1,
+                        1,
+                        new BigDecimal("0.82"),
+                        new BigDecimal("0.005"),
+                        new BigDecimal("0.2352"),
+                        BigDecimal.ZERO,
+                        "GRID",
                         1,
                         List.of(
                             new LoadPlanningAgentPlacementResponse(
+                                "PALLET-1-BOX-00001",
                                 "ITEM-001",
+                                1,
                                 1,
                                 BigDecimal.ZERO,
                                 BigDecimal.ZERO,
@@ -446,6 +458,8 @@ class LoadPlanningAgentRunControllerTest {
                                 new BigDecimal("300"),
                                 new BigDecimal("200"),
                                 new BigDecimal("150"),
+                                0,
+                                new BigDecimal("2.5"),
                                 "DEFAULT")))))));
   }
 }

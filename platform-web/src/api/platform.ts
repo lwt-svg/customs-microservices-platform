@@ -532,8 +532,12 @@ export interface LoadPlanningAgentEvent {
 }
 
 export interface LoadPlanningPlacement {
+  /** 算法生成的稳定摆放标识；旧版持久化方案可能没有。 */
+  placementId: string | null
   itemCode: string
   boxIndex: number
+  /** 算法层号从 1 开始；旧版持久化方案可能没有。 */
+  layer: number | null
   /**
    * 箱体左下后角在托盘局部坐标系内的位置，单位 mm。
    *
@@ -546,6 +550,8 @@ export interface LoadPlanningPlacement {
   lengthMm: number
   widthMm: number
   heightMm: number
+  rotationDeg: number | null
+  grossWeightKg: number | null
   orientation: string
 }
 
@@ -553,8 +559,17 @@ export interface LoadPlanningPlanPallet {
   palletIndex: number
   palletCode: string
   loadedHeightMm: number
+  payloadWeightKg: number | null
   grossWeightKg: number
   boxCount: number
+  layerCount: number | null
+  capacityBoxCount: number | null
+  layerAreaUtilization: number | null
+  payloadWeightUtilization: number | null
+  heightUtilization: number | null
+  balanceOffset: number | null
+  patternType: string | null
+  boxesPerFullLayer: number | null
   placements: LoadPlanningPlacement[]
 }
 
@@ -562,6 +577,9 @@ export interface LoadPlanningPlanMetrics {
   totalPallets: number
   totalBoxes: number
   unplacedBoxes: number
+  /** 已使用层的平均平面占用率；旧方案回退读取 volumeUtilization。 */
+  layerAreaUtilization: number | null
+  /** @deprecated 名称不准确，仅用于兼容旧版方案。 */
   volumeUtilization: number
   weightUtilization: number
   averageLoadedHeightMm: number

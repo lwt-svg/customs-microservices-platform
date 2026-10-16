@@ -519,6 +519,7 @@ public class LoadPlanningAgentRunService {
       @JsonProperty("total_pallets") Integer totalPallets,
       @JsonProperty("total_boxes") Integer totalBoxes,
       @JsonProperty("unplaced_boxes") Integer unplacedBoxes,
+      @JsonProperty("layer_area_utilization") BigDecimal layerAreaUtilization,
       @JsonProperty("volume_utilization") BigDecimal volumeUtilization,
       @JsonProperty("weight_utilization") BigDecimal weightUtilization,
       @JsonProperty("average_loaded_height_mm") BigDecimal averageLoadedHeightMm,
@@ -530,6 +531,7 @@ public class LoadPlanningAgentRunService {
           totalPallets,
           totalBoxes,
           unplacedBoxes,
+          layerAreaUtilization == null ? volumeUtilization : layerAreaUtilization,
           volumeUtilization,
           weightUtilization,
           averageLoadedHeightMm,
@@ -542,8 +544,17 @@ public class LoadPlanningAgentRunService {
       @JsonProperty("pallet_index") Integer palletIndex,
       @JsonProperty("pallet_code") String palletCode,
       @JsonProperty("loaded_height_mm") BigDecimal loadedHeightMm,
+      @JsonProperty("payload_weight_kg") BigDecimal payloadWeightKg,
       @JsonProperty("gross_weight_kg") BigDecimal grossWeightKg,
       @JsonProperty("box_count") Integer boxCount,
+      @JsonProperty("layer_count") Integer layerCount,
+      @JsonProperty("capacity_box_count") Integer capacityBoxCount,
+      @JsonProperty("layer_area_utilization") BigDecimal layerAreaUtilization,
+      @JsonProperty("payload_weight_utilization") BigDecimal payloadWeightUtilization,
+      @JsonProperty("height_utilization") BigDecimal heightUtilization,
+      @JsonProperty("balance_offset") BigDecimal balanceOffset,
+      @JsonProperty("pattern_type") String patternType,
+      @JsonProperty("boxes_per_full_layer") Integer boxesPerFullLayer,
       List<RemotePlacement> placements) {
 
     private LoadPlanningAgentPalletResponse toPlatformResponse() {
@@ -551,26 +562,51 @@ public class LoadPlanningAgentRunService {
           palletIndex,
           palletCode,
           loadedHeightMm,
+          payloadWeightKg,
           grossWeightKg,
           boxCount,
+          layerCount,
+          capacityBoxCount,
+          layerAreaUtilization,
+          payloadWeightUtilization,
+          heightUtilization,
+          balanceOffset,
+          patternType,
+          boxesPerFullLayer,
           mapList(placements, RemotePlacement::toPlatformResponse));
     }
   }
 
   private record RemotePlacement(
+      @JsonProperty("placement_id") String placementId,
       @JsonProperty("item_code") String itemCode,
       @JsonProperty("box_index") Integer boxIndex,
+      Integer layer,
       @JsonProperty("x_mm") BigDecimal xMm,
       @JsonProperty("y_mm") BigDecimal yMm,
       @JsonProperty("z_mm") BigDecimal zMm,
       @JsonProperty("length_mm") BigDecimal lengthMm,
       @JsonProperty("width_mm") BigDecimal widthMm,
       @JsonProperty("height_mm") BigDecimal heightMm,
+      @JsonProperty("rotation_deg") Integer rotationDeg,
+      @JsonProperty("gross_weight_kg") BigDecimal grossWeightKg,
       String orientation) {
 
     private LoadPlanningAgentPlacementResponse toPlatformResponse() {
       return new LoadPlanningAgentPlacementResponse(
-          itemCode, boxIndex, xMm, yMm, zMm, lengthMm, widthMm, heightMm, orientation);
+          placementId,
+          itemCode,
+          boxIndex,
+          layer,
+          xMm,
+          yMm,
+          zMm,
+          lengthMm,
+          widthMm,
+          heightMm,
+          rotationDeg,
+          grossWeightKg,
+          orientation);
     }
   }
 

@@ -774,6 +774,7 @@ def _placement_dict(
         "length_mm": _number(placement.length),
         "width_mm": _number(placement.width),
         "height_mm": _number(placement.height),
+        "gross_weight_kg": _number(cargo.gross_weight_kg),
         "rotation_deg": placement.rotation_deg,
     }
 

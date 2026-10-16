@@ -174,14 +174,20 @@ class AgentEventRead(BaseModel):
 class PlacementRead(BaseModel):
     """单箱在托盘坐标系中的轴对齐长方体。"""
 
+    # 下面三个字段是在 Pallet Digital Twin V2 中补充的。它们提供算法结果的稳定定位、
+    # 分层查看和旋转角度；默认值用于兼容数据库中已经保存的旧版方案快照。
+    placement_id: str | None = None
     item_code: str
     box_index: int
+    layer: int | None = Field(default=None, ge=1)
     x_mm: float
     y_mm: float
     z_mm: float
     length_mm: float
     width_mm: float
     height_mm: float
+    rotation_deg: int | None = None
+    gross_weight_kg: float | None = Field(default=None, ge=0)
     orientation: str
 
 
@@ -191,8 +197,17 @@ class PalletLoadRead(BaseModel):
     pallet_index: int
     pallet_code: str
     loaded_height_mm: float
+    payload_weight_kg: float | None = Field(default=None, ge=0)
     gross_weight_kg: float
     box_count: int
+    layer_count: int | None = Field(default=None, ge=0)
+    capacity_box_count: int | None = Field(default=None, ge=0)
+    layer_area_utilization: float | None = Field(default=None, ge=0)
+    payload_weight_utilization: float | None = Field(default=None, ge=0)
+    height_utilization: float | None = Field(default=None, ge=0)
+    balance_offset: float | None = Field(default=None, ge=0)
+    pattern_type: str | None = None
+    boxes_per_full_layer: int | None = Field(default=None, ge=0)
     placements: list[PlacementRead]
 
 
@@ -202,6 +217,9 @@ class PackingMetricsRead(BaseModel):
     total_pallets: int
     total_boxes: int
     unplaced_boxes: int
+    # 正确业务含义是“已使用层的平均平面占用率”。volume_utilization 暂时保留，
+    # 只为兼容旧版本和已经持久化的方案 JSON，前端新页面优先使用本字段。
+    layer_area_utilization: float | None = Field(default=None, ge=0)
     volume_utilization: float
     weight_utilization: float
     average_loaded_height_mm: float

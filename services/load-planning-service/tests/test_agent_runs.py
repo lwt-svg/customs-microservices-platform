@@ -193,6 +193,24 @@ async def test_agent_should_pause_ask_and_resume_with_three_plans(
         and plan["score_version"] == "PALLET_PLAN_SCORE_V1"
         for plan in result["plans"]
     )
+    first_plan = result["plans"][0]
+    first_pallet = first_plan["pallets"][0]
+    first_placement = first_pallet["placements"][0]
+    assert first_plan["metrics"]["layer_area_utilization"] == (
+        first_plan["metrics"]["volume_utilization"]
+    )
+    assert first_pallet["payload_weight_kg"] > 0
+    assert first_pallet["layer_count"] >= 1
+    assert 0 <= first_pallet["layer_area_utilization"] <= 1
+    assert 0 <= first_pallet["payload_weight_utilization"] <= 1
+    assert 0 <= first_pallet["height_utilization"] <= 1
+    assert first_pallet["balance_offset"] >= 0
+    assert first_pallet["pattern_type"]
+    assert first_pallet["boxes_per_full_layer"] >= 1
+    assert first_placement["placement_id"]
+    assert first_placement["layer"] >= 1
+    assert first_placement["rotation_deg"] in {0, 90}
+    assert first_placement["gross_weight_kg"] > 0
     assert [event["sequence"] for event in result["events"]] == list(
         range(1, len(result["events"]) + 1)
     )

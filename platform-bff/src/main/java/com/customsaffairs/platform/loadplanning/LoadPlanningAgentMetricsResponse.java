@@ -7,6 +7,8 @@ public record LoadPlanningAgentMetricsResponse(
     Integer totalPallets,
     Integer totalBoxes,
     Integer unplacedBoxes,
+    BigDecimal layerAreaUtilization,
+    /** @deprecated 旧字段名不准确；新页面应读取 {@code layerAreaUtilization}。 */
     BigDecimal volumeUtilization,
     BigDecimal weightUtilization,
     BigDecimal averageLoadedHeightMm,

@@ -361,7 +361,7 @@ async def test_openai_responses_provider_uses_structured_output_and_mock_http() 
         total_pallets=2,
         total_boxes=24,
         unplaced_boxes=0,
-        volume_utilization=0.72,
+        layer_area_utilization=0.72,
         weight_utilization=0.61,
         average_loaded_height_mm=870,
         max_loaded_height_mm=900,

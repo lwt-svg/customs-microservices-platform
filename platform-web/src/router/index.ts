@@ -9,11 +9,15 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    name: 'portal',
+    redirect: '/dashboard',
+  },
+  {
+    path: '/workspaces',
+    name: 'workspaces',
     component: () => import('@/views/PortalView.vue'),
     meta: {
-      title: '沙丘 OS',
-      description: '统一进入关务与供应链业务域',
+      title: '能力目录',
+      description: '查看 TradeOps 已接入的专业作业能力',
     },
   },
   {
@@ -21,8 +25,8 @@ const routes: RouteRecordRaw[] = [
     name: 'dashboard',
     component: () => import('@/views/DashboardView.vue'),
     meta: {
-      title: '平台工作台',
-      description: '查看平台数据与服务运行状态',
+      title: '运营驾驶舱',
+      description: '查看跨境发运案件、待办与专业作业运行态势',
     },
   },
   {
@@ -62,6 +66,17 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/tradeops/shipment-cases/:caseNumber',
+    name: 'shipment-case-workspace',
+    component: () => import('@/views/ShipmentCaseWorkspaceView.vue'),
+    meta: {
+      title: '发运案件工作台',
+      description: '查看单票案件的协同阶段、专业资源、当前建议与审计时间线',
+      // 动态详情页仍属于“发运案件”菜单，侧栏不应在进入案件后失去高亮。
+      activeMenuPath: '/tradeops/shipment-cases',
+    },
+  },
+  {
     path: '/link-booking/applications',
     name: 'link-booking-applications',
     component: () => import('@/views/LinkBookingView.vue'),
@@ -76,7 +91,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/LoadPlanningOverviewView.vue'),
     meta: {
       title: '智能装载中心',
-      description: '面向箱到托盘、托盘到集装箱的装载规划工作台',
+      description: '面向箱到托盘的装载规划、3D 复核与审批工作台',
     },
   },
   {
@@ -90,7 +105,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/:pathMatch(.*)*',
-    redirect: '/',
+    redirect: '/dashboard',
   },
 ]
 

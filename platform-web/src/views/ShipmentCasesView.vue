@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   getShipmentCases,
@@ -9,14 +10,14 @@ import {
   type ShipmentTransportScenario,
 } from '@/api/platform'
 import ShipmentCaseCreateDrawer from '@/components/shipment-case/ShipmentCaseCreateDrawer.vue'
-import ShipmentCaseDetailDrawer from '@/components/shipment-case/ShipmentCaseDetailDrawer.vue'
 import UiIcon from '@/components/UiIcon.vue'
 
+const router = useRouter()
 const shipmentCases = ref<ShipmentCase[]>([])
 const loading = ref(true)
 const loadError = ref('')
-const successMessage = ref('')
 const lastRefreshedAt = ref<Date | null>(null)
+const hasSuccessfulSnapshot = ref(false)
 
 const keyword = ref('')
 const statusFilter = ref<ShipmentCaseStatus | ''>('')
@@ -24,8 +25,6 @@ const scenarioFilter = ref<ShipmentTransportScenario | ''>('')
 const onlyUnbound = ref(false)
 
 const showCreateDrawer = ref(false)
-const showDetailDrawer = ref(false)
-const selectedCaseNumber = ref<string | null>(null)
 
 const statusLabels: Record<ShipmentCaseStatus, string> = {
   DRAFT: '草稿',
@@ -99,6 +98,7 @@ async function loadCases(): Promise<void> {
   try {
     shipmentCases.value = sortCases(await getShipmentCases())
     lastRefreshedAt.value = new Date()
+    hasSuccessfulSnapshot.value = true
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '读取发运案件失败'
   } finally {
@@ -136,8 +136,10 @@ function showUnboundCases(): void {
 }
 
 function openDetail(caseNumber: string): void {
-  selectedCaseNumber.value = caseNumber
-  showDetailDrawer.value = true
+  void router.push({
+    name: 'shipment-case-workspace',
+    params: { caseNumber },
+  })
 }
 
 function replaceCase(changed: ShipmentCase): void {
@@ -154,13 +156,7 @@ function replaceCase(changed: ShipmentCase): void {
 
 function onCaseCreated(created: ShipmentCase): void {
   replaceCase(created)
-  successMessage.value = `发运案件“${created.caseName}”已创建。`
-  selectedCaseNumber.value = created.caseNumber
-  showDetailDrawer.value = true
-}
-
-function onCaseUpdated(changed: ShipmentCase): void {
-  replaceCase(changed)
+  openDetail(created.caseNumber)
 }
 
 function countResources(
@@ -197,6 +193,10 @@ function formatRefreshTime(value: Date | null): string {
   }).format(value)
 }
 
+function metricCount(value: number): number | string {
+  return hasSuccessfulSnapshot.value ? value : '—'
+}
+
 onMounted(loadCases)
 </script>
 
@@ -229,10 +229,6 @@ onMounted(loadCases)
       </div>
     </header>
 
-    <div v-if="successMessage" class="feedback-banner success" role="status">
-      <span>✓</span>
-      <p>{{ successMessage }}</p>
-    </div>
     <div v-if="loadError" class="feedback-banner error" role="alert">
       <span>!</span>
       <p>{{ loadError }}</p>
@@ -249,7 +245,7 @@ onMounted(loadCases)
         <span class="shipment-kpi-icon total"><UiIcon name="truck" /></span>
         <span>
           <small>案件总数</small>
-          <strong>{{ totalCount }}</strong>
+          <strong>{{ metricCount(totalCount) }}</strong>
           <em>全部纳管发运案件</em>
         </span>
       </button>
@@ -262,7 +258,7 @@ onMounted(loadCases)
         <span class="shipment-kpi-icon draft"><UiIcon name="file" /></span>
         <span>
           <small>草稿案件</small>
-          <strong>{{ draftCount }}</strong>
+          <strong>{{ metricCount(draftCount) }}</strong>
           <em>等待确认范围或启动</em>
         </span>
       </button>
@@ -275,7 +271,7 @@ onMounted(loadCases)
         <span class="shipment-kpi-icon active"><UiIcon name="layers" /></span>
         <span>
           <small>进行中</small>
-          <strong>{{ activeCount }}</strong>
+          <strong>{{ metricCount(activeCount) }}</strong>
           <em>正在推进专业作业</em>
         </span>
       </button>
@@ -288,7 +284,7 @@ onMounted(loadCases)
         <span class="shipment-kpi-icon unbound"><UiIcon name="alert" /></span>
         <span>
           <small>未绑定资源</small>
-          <strong>{{ unboundCount }}</strong>
+          <strong>{{ metricCount(unboundCount) }}</strong>
           <em>尚无装载或订舱引用</em>
         </span>
       </button>
@@ -357,6 +353,18 @@ onMounted(loadCases)
         <span class="loading-ring"></span>
         <strong>正在同步发运案件</strong>
         <p>正在通过 Java BFF 读取 Agent Runtime 中的案件快照。</p>
+      </div>
+
+      <div
+        v-else-if="loadError && shipmentCases.length === 0"
+        class="shipment-empty-state"
+      >
+        <span><UiIcon name="alert" /></span>
+        <div>
+          <strong>当前无法判断是否存在发运案件</strong>
+          <p>案件来源读取失败；这里不会把未知状态显示成“零条案件”。</p>
+        </div>
+        <button class="secondary-button" type="button" @click="loadCases">重新加载</button>
       </div>
 
       <div v-else-if="shipmentCases.length === 0" class="shipment-empty-state">
@@ -457,11 +465,6 @@ onMounted(loadCases)
     <ShipmentCaseCreateDrawer
       v-model="showCreateDrawer"
       @created="onCaseCreated"
-    />
-    <ShipmentCaseDetailDrawer
-      v-model="showDetailDrawer"
-      :case-number="selectedCaseNumber"
-      @updated="onCaseUpdated"
     />
   </section>
 </template>

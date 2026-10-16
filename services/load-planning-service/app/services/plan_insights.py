@@ -71,7 +71,7 @@ class _NumericPlanContext(BaseModel):
     total_pallets: int = Field(ge=0)
     total_boxes: int = Field(ge=0)
     unplaced_boxes: int = Field(ge=0)
-    volume_utilization: float = Field(ge=0, le=1)
+    layer_area_utilization: float = Field(ge=0, le=1)
     weight_utilization: float = Field(ge=0, le=1)
     average_loaded_height_mm: float = Field(ge=0)
     max_loaded_height_mm: float = Field(ge=0)
@@ -165,7 +165,13 @@ def _build_numeric_context(plan: PackingPlan) -> _NumericPlanContext:
         total_pallets=_integer_metric(plan, "total_pallets"),
         total_boxes=_integer_metric(plan, "total_boxes"),
         unplaced_boxes=_integer_metric(plan, "unplaced_boxes"),
-        volume_utilization=_metric(plan, "volume_utilization"),
+        # 新方案使用准确字段名；旧版持久化方案仍只有 volume_utilization，
+        # 因此读取时保留兼容回退，但传给 Provider 的白名单只暴露准确语义。
+        layer_area_utilization=(
+            _metric(plan, "layer_area_utilization")
+            if "layer_area_utilization" in plan.metrics
+            else _metric(plan, "volume_utilization")
+        ),
         weight_utilization=_metric(plan, "weight_utilization"),
         average_loaded_height_mm=_metric(plan, "average_loaded_height_mm"),
         max_loaded_height_mm=_metric(plan, "max_loaded_height_mm"),
@@ -200,7 +206,7 @@ class RuleBasedPlanInsightProvider:
             f"该方案确定性评分为 {context.score:.1f}，计划使用 {context.total_pallets} 个托盘，"
             f"已放置 {context.total_boxes} 箱，完成率 {completion_rate * 100:.1f}%；"
             f"平均装载高度 {context.average_loaded_height_mm:.1f} mm，"
-            f"体积利用率 {context.volume_utilization * 100:.1f}%。"
+            f"层面积利用率 {context.layer_area_utilization * 100:.1f}%。"
         )
 
         tradeoffs = [
@@ -227,8 +233,8 @@ class RuleBasedPlanInsightProvider:
             risks.append(f"仍有 {context.unplaced_boxes} 箱未放置，当前候选不能完整覆盖需求。")
         if context.warning_count:
             risks.append(f"原方案包含 {context.warning_count} 项提示，需返回方案明细逐项核对。")
-        if context.volume_utilization >= 0.9:
-            risks.append("体积利用率较高，现场尺寸偏差和包装鼓包可能缩小可用余量。")
+        if context.layer_area_utilization >= 0.9:
+            risks.append("层面积利用率较高，现场尺寸偏差和包装鼓包可能缩小平面余量。")
         if context.max_loaded_height_mm > context.average_loaded_height_mm * 1.25:
             risks.append("最高托盘明显高于平均值，应重点复核高度分布和搬运稳定性。")
         if not risks:

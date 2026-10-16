@@ -80,7 +80,14 @@ class LoadPlanningAgentRunServiceTest {
     assertThat(response.events().getFirst().eventType()).isEqualTo("PLAN_GENERATED");
     assertThat(response.plans().getFirst().metrics().volumeUtilization())
         .isEqualByComparingTo("0.82");
+    assertThat(response.plans().getFirst().metrics().layerAreaUtilization())
+        .isEqualByComparingTo("0.82");
+    assertThat(response.plans().getFirst().pallets().getFirst().layerCount()).isEqualTo(2);
+    assertThat(response.plans().getFirst().pallets().getFirst().balanceOffset())
+        .isEqualByComparingTo("0.04");
     assertThat(response.plans().getFirst().pallets().getFirst().placements()).hasSize(2);
+    assertThat(response.plans().getFirst().pallets().getFirst().placements().getFirst().layer())
+        .isEqualTo(1);
     assertThat(response.plans().getFirst().pallets().getFirst().placements().get(1).orientation())
         .isEqualTo("ROTATED_90");
     mockServer.verify();
@@ -420,6 +427,7 @@ class LoadPlanningAgentRunServiceTest {
                       "total_pallets": 2,
                       "total_boxes": 12,
                       "unplaced_boxes": 0,
+                      "layer_area_utilization": 0.82,
                       "volume_utilization": 0.82,
                       "weight_utilization": 0.61,
                       "average_loaded_height_mm": 1044,
@@ -431,27 +439,44 @@ class LoadPlanningAgentRunServiceTest {
                       "pallet_index": 1,
                       "pallet_code": "PALLET-1200X800",
                       "loaded_height_mm": 1144,
+                      "payload_weight_kg": 45,
                       "gross_weight_kg": 50,
                       "box_count": 2,
+                      "layer_count": 2,
+                      "capacity_box_count": 16,
+                      "layer_area_utilization": 0.82,
+                      "payload_weight_utilization": 0.09,
+                      "height_utilization": 0.9152,
+                      "balance_offset": 0.04,
+                      "pattern_type": "GRID",
+                      "boxes_per_full_layer": 8,
                       "placements": [{
+                        "placement_id": "PALLET-001-BOX-00001",
                         "item_code": "ITEM-001",
                         "box_index": 1,
+                        "layer": 1,
                         "x_mm": 0,
                         "y_mm": 0,
                         "z_mm": 144,
                         "length_mm": 300,
                         "width_mm": 200,
                         "height_mm": 150,
+                        "rotation_deg": 0,
+                        "gross_weight_kg": 22.5,
                         "orientation": "DEFAULT"
                       }, {
+                        "placement_id": "PALLET-001-BOX-00002",
                         "item_code": "ITEM-001",
                         "box_index": 2,
+                        "layer": 1,
                         "x_mm": 300,
                         "y_mm": 0,
                         "z_mm": 144,
                         "length_mm": 200,
                         "width_mm": 300,
                         "height_mm": 150,
+                        "rotation_deg": 90,
+                        "gross_weight_kg": 22.5,
                         "orientation": "ROTATED_90"
                       }]
                     }]

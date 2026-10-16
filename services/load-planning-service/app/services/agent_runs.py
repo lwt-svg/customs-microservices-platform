@@ -871,16 +871,22 @@ class StatefulPalletAgentService:
         algorithm_pallets = list(raw.get("pallets", []))
         pallets: list[dict[str, object]] = []
         for pallet_index, algorithm_pallet in enumerate(algorithm_pallets, start=1):
+            utilization = dict(algorithm_pallet.get("utilization", {}))
+            pattern = dict(algorithm_pallet.get("pattern", {}))
             placements = [
                 {
+                    "placement_id": placement.get("placement_id"),
                     "item_code": placement["item_code"],
                     "box_index": placement["sequence"],
+                    "layer": placement.get("layer"),
                     "x_mm": placement["x_mm"],
                     "y_mm": placement["y_mm"],
                     "z_mm": placement["z_mm"],
                     "length_mm": placement["length_mm"],
                     "width_mm": placement["width_mm"],
                     "height_mm": placement["height_mm"],
+                    "rotation_deg": placement.get("rotation_deg"),
+                    "gross_weight_kg": placement.get("gross_weight_kg"),
                     "orientation": (
                         "LENGTH_ALONG_X" if placement["rotation_deg"] == 0 else "WIDTH_ALONG_X"
                     ),
@@ -892,8 +898,17 @@ class StatefulPalletAgentService:
                     "pallet_index": pallet_index,
                     "pallet_code": algorithm_pallet["pallet_code"],
                     "loaded_height_mm": algorithm_pallet["total_height_mm"],
+                    "payload_weight_kg": algorithm_pallet.get("payload_weight_kg"),
                     "gross_weight_kg": algorithm_pallet["gross_weight_kg"],
                     "box_count": algorithm_pallet["box_count"],
+                    "layer_count": algorithm_pallet.get("layer_count"),
+                    "capacity_box_count": algorithm_pallet.get("capacity_box_count"),
+                    "layer_area_utilization": utilization.get("layer_area_ratio"),
+                    "payload_weight_utilization": utilization.get("payload_weight_ratio"),
+                    "height_utilization": utilization.get("height_ratio"),
+                    "balance_offset": utilization.get("balance_offset"),
+                    "pattern_type": pattern.get("type"),
+                    "boxes_per_full_layer": pattern.get("boxes_per_full_layer"),
                     "placements": placements,
                 }
             )
@@ -908,16 +923,18 @@ class StatefulPalletAgentService:
             float(value["gross_weight_kg"]) - float(pallet.tare_weight_kg) for value in pallets
         )
         loaded_heights = [float(value["loaded_height_mm"]) for value in pallets]
+        layer_area_utilization = round(
+            float(algorithm_metrics.get("average_layer_area_utilization", 0)),
+            6,
+        )
         metrics: dict[str, int | float] = {
             "total_pallets": len(pallets),
             "total_boxes": int(algorithm_metrics.get("placed_box_count", 0)),
             "unplaced_boxes": int(algorithm_metrics.get("unplaced_box_count", 0)),
-            # 同一 SKU 的每层箱高一致，因此“平均层面积利用率”等价于已用层空间的
-            # 体积利用率；它不会把托盘上方未使用的限高空间伪装成已利用体积。
-            "volume_utilization": round(
-                float(algorithm_metrics.get("average_layer_area_utilization", 0)),
-                6,
-            ),
+            # 新字段使用准确名称。旧字段暂时返回同一数值，保证旧页面、旧 Java DTO
+            # 与已经持久化的方案在滚动升级期间仍然可读。
+            "layer_area_utilization": layer_area_utilization,
+            "volume_utilization": layer_area_utilization,
             "weight_utilization": round(
                 payload_weight / total_payload_capacity if total_payload_capacity else 0,
                 6,
@@ -944,7 +961,7 @@ class StatefulPalletAgentService:
         summary = (
             f"{names[strategy_code]}：使用 {metrics['total_pallets']} 托，"
             f"放置 {metrics['total_boxes']} 箱，未放置 {metrics['unplaced_boxes']} 箱；"
-            f"体积利用率 {float(metrics['volume_utilization']) * 100:.1f}%，"
+            f"层面积利用率 {float(metrics['layer_area_utilization']) * 100:.1f}%，"
             f"确定性评分 {score:.1f}。"
         )
         return {
@@ -969,11 +986,14 @@ class StatefulPalletAgentService:
         pallet: PalletSpecInput,
         feasible: bool,
     ) -> float:
-        """透明评分公式：完成度 35、体积 30、重量 15、策略目标 20。"""
+        """透明评分公式：完成度 35、层面积 30、重量 15、策略目标 20。"""
 
         total = int(metrics["total_boxes"]) + int(metrics["unplaced_boxes"])
         completion = int(metrics["total_boxes"]) / total if total else 1.0
-        volume = min(1.0, max(0.0, float(metrics["volume_utilization"])))
+        layer_area = min(
+            1.0,
+            max(0.0, float(metrics["layer_area_utilization"])),
+        )
         weight = min(1.0, max(0.0, float(metrics["weight_utilization"])))
         height_ratio = min(
             1.0,
@@ -984,10 +1004,15 @@ class StatefulPalletAgentService:
         if strategy_code == PackingStrategyCode.STABLE.value:
             strategy_component = stability
         elif strategy_code == PackingStrategyCode.UTILIZATION.value:
-            strategy_component = volume
+            strategy_component = layer_area
         else:
-            strategy_component = (stability + volume) / 2
-        score = 35 * completion + 30 * volume + 15 * weight + 20 * strategy_component
+            strategy_component = (stability + layer_area) / 2
+        score = (
+            35 * completion
+            + 30 * layer_area
+            + 15 * weight
+            + 20 * strategy_component
+        )
         if not feasible:
             score *= completion
         return round(score, 2)

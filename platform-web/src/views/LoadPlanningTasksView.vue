@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import {
   createLoadPlanningTask,
@@ -19,6 +20,8 @@ import {
 } from '@/api/platform'
 import UiIcon from '@/components/UiIcon.vue'
 import PackingListPreviewDrawer from '@/components/load-planning/PackingListPreviewDrawer.vue'
+
+const route = useRoute()
 
 // Three.js 只在用户真正打开智能体工作台时下载，日常任务列表不承担 3D 运行时体积。
 const AgentPlanningWorkbench = defineAsyncComponent(
@@ -852,7 +855,31 @@ function optionalValue(value: number | boolean | null, unit = ''): string {
   return `${value}${unit}`
 }
 
-onMounted(loadTasks)
+function routeQueryValue(value: unknown): string {
+  if (Array.isArray(value)) return String(value[0] ?? '').trim()
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * 驾驶舱和案件工作台可以携带稳定任务编号直接进入具体对象。
+ *
+ * URL 只负责定位；真正的完整任务仍由 Java BFF 重新读取，避免把列表摘要当成权威输入。
+ */
+async function openRouteRequestedTask(): Promise<void> {
+  const taskNumber = routeQueryValue(route.query.taskNumber)
+  if (!taskNumber) return
+
+  if (routeQueryValue(route.query.view) === 'detail') {
+    await openTaskDetail(taskNumber)
+  } else {
+    await openTaskPlanning(taskNumber)
+  }
+}
+
+onMounted(async () => {
+  await loadTasks()
+  await openRouteRequestedTask()
+})
 </script>
 
 <template>

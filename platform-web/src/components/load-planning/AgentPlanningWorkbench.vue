@@ -861,7 +861,16 @@ watch(
                   <dl>
                     <div><dt>托盘</dt><dd>{{ plan.metrics.totalPallets }}</dd></div>
                     <div><dt>未放置</dt><dd>{{ plan.metrics.unplacedBoxes }}</dd></div>
-                    <div><dt>体积利用</dt><dd>{{ formatPercent(plan.metrics.volumeUtilization) }}</dd></div>
+                    <div>
+                      <dt>层面积利用</dt>
+                      <dd>
+                        {{
+                          formatPercent(
+                            plan.metrics.layerAreaUtilization ?? plan.metrics.volumeUtilization,
+                          )
+                        }}
+                      </dd>
+                    </div>
                     <div><dt>最高</dt><dd>{{ plan.metrics.maxLoadedHeightMm.toFixed(0) }} mm</dd></div>
                   </dl>
                   <span class="plan-feasibility" :data-feasible="plan.feasible">

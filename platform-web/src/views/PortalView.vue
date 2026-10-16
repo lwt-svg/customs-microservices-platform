@@ -46,7 +46,7 @@ import UiIcon from '@/components/UiIcon.vue'
           <span class="domain-status active">关务专业能力</span>
         </div>
         <span class="domain-index">01 / CUSTOMS</span>
-        <h3>关务 OS</h3>
+        <h3>关务与订舱能力</h3>
         <p>处理出口单证与 CEVA LINK 订舱业务，支持业务复核、提交跟踪和操作留痕。</p>
         <ul>
           <li>装箱单信息提取与人工复核</li>
@@ -54,7 +54,7 @@ import UiIcon from '@/components/UiIcon.vue'
           <li>异步提交、幂等控制与状态跟踪</li>
         </ul>
         <RouterLink class="domain-entry" to="/link-booking/applications">
-          进入关务 OS
+          进入 LINK 作业
           <UiIcon name="arrow" />
         </RouterLink>
       </article>
@@ -65,7 +65,7 @@ import UiIcon from '@/components/UiIcon.vue'
           <span class="domain-status active">供应链专业能力</span>
         </div>
         <span class="domain-index">02 / SUPPLY CHAIN</span>
-        <h3>供应链 OS</h3>
+        <h3>智能装载能力</h3>
         <p>面向箱到托盘的装载规划与执行复核，统一管理任务、方案、审批和正式版本。</p>
         <ul>
           <li>PL 解析、任务主数据与来源追踪</li>
@@ -74,7 +74,7 @@ import UiIcon from '@/components/UiIcon.vue'
           <li>面向业务人员的方案说明与风险提示</li>
         </ul>
         <RouterLink class="domain-entry" to="/supply-chain/load-planning">
-          进入供应链 OS
+          进入智能装载
           <UiIcon name="arrow" />
         </RouterLink>
       </article>

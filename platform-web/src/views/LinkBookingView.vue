@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import {
   changeLinkBookingApplicationStatus,
@@ -15,10 +16,13 @@ import UiIcon from '@/components/UiIcon.vue'
 import PdfImportDrawer from '@/components/link-booking/PdfImportDrawer.vue'
 import LinkBookingWizard from '@/components/link-booking/LinkBookingWizard.vue'
 
+const route = useRoute()
+
 // 页面列表状态：只保存 Java BFF 已经返回到浏览器的数据。
 const applications = ref<LinkBookingApplication[]>([])
 const loading = ref(true)
 const loadError = ref('')
+const hasSuccessfulSnapshot = ref(false)
 const keyword = ref('')
 const statusFilter = ref('')
 
@@ -133,6 +137,7 @@ async function loadApplications(): Promise<void> {
 
   try {
     applications.value = await getLinkBookingApplications()
+    hasSuccessfulSnapshot.value = true
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '读取 LINK 订舱申请失败'
   } finally {
@@ -385,7 +390,40 @@ function formatDateTime(value: string): string {
   }).format(new Date(value))
 }
 
-onMounted(loadApplications)
+function routeQueryValue(value: unknown): string {
+  if (Array.isArray(value)) return String(value[0] ?? '').trim()
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * 运营驾驶舱可使用稳定申请编号直达某一份业务对象。
+ *
+ * 草稿待办进入七步填单；其他状态进入权威详情。找不到编号时保留列表，并给出明确错误，
+ * 不自动选择相似申请。
+ */
+async function openRouteRequestedApplication(): Promise<void> {
+  const applicationNumber = routeQueryValue(route.query.applicationNumber)
+  if (!applicationNumber || !hasSuccessfulSnapshot.value) return
+
+  const application = applications.value.find(
+    (candidate) => candidate.applicationNumber === applicationNumber,
+  )
+  if (!application) {
+    loadError.value = `未找到订舱申请“${applicationNumber}”`
+    return
+  }
+
+  if (routeQueryValue(route.query.view) === 'wizard' && application.status === 'DRAFT') {
+    openLinkWizard(application)
+  } else {
+    await openDetail(application)
+  }
+}
+
+onMounted(async () => {
+  await loadApplications()
+  await openRouteRequestedApplication()
+})
 onUnmounted(stopDetailPolling)
 </script>
 
@@ -424,7 +462,10 @@ onUnmounted(stopDetailPolling)
       <div class="management-toolbar">
         <div>
           <h3>订舱申请列表</h3>
-          <p>共 {{ applications.length }} 条申请；新建申请由 Python 初始化为草稿</p>
+          <p>
+            共 {{ hasSuccessfulSnapshot ? applications.length : '—' }} 条申请；
+            新建申请由 Python 初始化为草稿
+          </p>
         </div>
         <div class="toolbar-filters">
           <label class="select-box">
@@ -448,6 +489,15 @@ onUnmounted(stopDetailPolling)
         <span class="loading-ring"></span>
         <strong>正在读取订舱申请</strong>
         <p>Java BFF 正在通过 Nacos 调用 Python LINK。</p>
+      </div>
+
+      <div
+        v-else-if="loadError && applications.length === 0"
+        class="empty-state"
+      >
+        <span class="empty-symbol">!</span>
+        <strong>当前无法判断是否存在订舱申请</strong>
+        <p>数据来源读取失败；恢复服务后再重新加载。</p>
       </div>
 
       <div v-else-if="filteredApplications.length === 0" class="empty-state">

@@ -18,6 +18,18 @@ type IconName =
   | 'box'
   | 'truck'
 
+interface NavigationItem {
+  label: string
+  path: string
+  icon: IconName
+  enabled: boolean
+}
+
+interface NavigationGroup {
+  title: string
+  items: NavigationItem[]
+}
+
 const props = defineProps<{
   menuTree: PlatformMenu[]
   menuLoading: boolean
@@ -37,67 +49,67 @@ const router = useRouter()
  * 它只是可用性兜底，不是第二份真实菜单数据，也不代表用户拥有这些权限。真正的权限
  * 过滤要等登录和 Spring Security 章节实现。
  */
-const fallbackGroups = [
+const fallbackGroups: NavigationGroup[] = [
   {
-    title: '工作空间',
-    items: [
-      { label: '沙丘 OS', path: '/', icon: 'dashboard' as IconName, enabled: true },
-      { label: '平台工作台', path: '/dashboard', icon: 'server' as IconName, enabled: true },
-    ],
-  },
-  {
-    title: '平台管理',
+    title: '核心工作台',
     items: [
       {
-        label: '组织管理',
-        path: '/organizations',
-        icon: 'organization' as IconName,
+        label: '运营驾驶舱',
+        path: '/dashboard',
+        icon: 'dashboard',
         enabled: true,
       },
-      { label: '用户管理', path: '/users', icon: 'users' as IconName, enabled: true },
       {
-        label: '角色与权限',
-        path: '/authorization',
-        icon: 'shield' as IconName,
-        enabled: true,
-      },
-    ],
-  },
-  {
-    title: 'TradeOps',
-    items: [
-      {
-        label: '发运案件中心',
+        label: '发运案件',
         path: '/tradeops/shipment-cases',
-        icon: 'truck' as IconName,
+        icon: 'truck',
         enabled: true,
       },
     ],
   },
   {
-    title: '关务 OS',
+    title: '专业作业',
     items: [
       {
-        label: '订舱申请',
+        label: 'LINK 自动订舱',
         path: '/link-booking/applications',
-        icon: 'database' as IconName,
+        icon: 'database',
         enabled: true,
       },
-    ],
-  },
-  {
-    title: '供应链 OS',
-    items: [
       {
         label: '智能装载中心',
         path: '/supply-chain/load-planning',
-        icon: 'layers' as IconName,
+        icon: 'layers',
         enabled: true,
       },
       {
         label: '装载任务',
         path: '/supply-chain/load-planning/tasks',
-        icon: 'box' as IconName,
+        icon: 'box',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: '平台治理',
+    items: [
+      {
+        label: '组织管理',
+        path: '/organizations',
+        icon: 'organization',
+        enabled: true,
+      },
+      { label: '用户管理', path: '/users', icon: 'users', enabled: true },
+      {
+        label: '角色与权限',
+        path: '/authorization',
+        icon: 'shield',
+        enabled: true,
+      },
+      {
+        label: '能力目录',
+        path: '/workspaces',
+        icon: 'server',
         enabled: true,
       },
     ],
@@ -131,22 +143,51 @@ const navigationGroups = computed(() => {
     return fallbackGroups
   }
 
-  return props.menuTree
-    .filter((menu) => menu.status === 'ACTIVE')
-    .map((rootMenu) => {
-      const menuItems = rootMenu.children.length > 0 ? rootMenu.children : [rootMenu]
-      return {
-        title: rootMenu.children.length > 0 ? rootMenu.menuName : '工作空间',
-        items: menuItems
-          .filter((menu) => menu.status === 'ACTIVE')
-          .map((menu) => ({
-            label: menu.menuName,
-            path: menu.routePath,
-            icon: toIconName(menu.icon),
-            enabled: supportedRoutePaths.has(menu.routePath),
-          })),
-      }
+  const groups: NavigationGroup[] = []
+  const standaloneItems: NavigationItem[] = []
+
+  for (const rootMenu of props.menuTree.filter((menu) => menu.status === 'ACTIVE')) {
+    const activeChildren = rootMenu.children.filter((menu) => menu.status === 'ACTIVE')
+
+    if (activeChildren.length === 0) {
+      standaloneItems.push({
+        label: rootMenu.menuName,
+        path: rootMenu.routePath,
+        icon: toIconName(rootMenu.icon),
+        enabled: supportedRoutePaths.has(rootMenu.routePath),
+      })
+      continue
+    }
+
+    groups.push({
+      title: rootMenu.menuName,
+      items: activeChildren.map((menu) => ({
+        label: menu.menuName,
+        path: menu.routePath,
+        icon: toIconName(menu.icon),
+        enabled: supportedRoutePaths.has(menu.routePath),
+      })),
     })
+  }
+
+  /**
+   * 兼容尚未执行最新 Flyway 迁移的本地数据库：多个无父节点菜单合并为一个分组，
+   * 避免每个节点都生成一个同名“工作空间”标题。V10 执行后，正常菜单均有明确分组。
+   */
+  if (standaloneItems.length > 0) {
+    groups.unshift({ title: '快捷入口', items: standaloneItems })
+  }
+
+  return groups
+})
+
+/**
+ * 动态详情路由可通过 activeMenuPath 指回所属列表菜单。
+ * 这里只解决导航高亮，不进行权限判断。
+ */
+const activeNavigationPath = computed(() => {
+  const configuredPath = route.meta.activeMenuPath
+  return typeof configuredPath === 'string' ? configuredPath : route.path
 })
 
 /**
@@ -165,7 +206,7 @@ const pageTitle = computed(() => {
   }
 
   return {
-    title: menuTitle || String(route.meta.title ?? '沙丘 OS'),
+    title: menuTitle || String(route.meta.title ?? '沙丘 TradeOps'),
     description: String(route.meta.description ?? ''),
   }
 })
@@ -180,22 +221,22 @@ function navigate(path: string): void {
 <template>
   <div class="admin-shell">
     <aside class="sidebar">
-      <RouterLink class="brand" to="/" aria-label="返回沙丘 OS 门户">
+      <RouterLink class="brand" to="/dashboard" aria-label="返回 TradeOps 运营驾驶舱">
         <span class="brand-mark"><span></span></span>
         <div>
-          <strong>沙丘 OS</strong>
-          <small>企业智能业务平台</small>
+          <strong>沙丘 TradeOps</strong>
+          <small>跨境发运智能作业平台</small>
         </div>
       </RouterLink>
 
-      <nav class="navigation" aria-label="后台主导航">
+      <nav class="navigation" aria-label="TradeOps 主导航">
         <section v-for="group in navigationGroups" :key="group.title" class="navigation-group">
           <p>{{ group.title }}</p>
           <button
             v-for="item in group.items"
             :key="item.label"
             class="navigation-item"
-            :class="{ active: item.path === route.path, disabled: !item.enabled }"
+            :class="{ active: item.path === activeNavigationPath, disabled: !item.enabled }"
             type="button"
             :disabled="!item.enabled"
             @click="navigate(item.path)"
@@ -229,7 +270,7 @@ function navigate(path: string): void {
           <span class="avatar">A</span>
           <div>
             <strong>admin</strong>
-            <small>本地管理员</small>
+            <small>本地演示身份</small>
           </div>
         </div>
       </header>

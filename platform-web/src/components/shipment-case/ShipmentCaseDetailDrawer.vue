@@ -464,10 +464,13 @@ function verificationSourceLabel(value: string): string {
   return labels[value] ?? value
 }
 
-function resourceWorkspacePath(resourceType: ShipmentResourceType): string {
+function resourceWorkspacePath(
+  resourceType: ShipmentResourceType,
+  resourceNumber: string,
+): string {
   return resourceType === 'LOAD_PLANNING_TASK'
-    ? '/supply-chain/load-planning/tasks'
-    : '/link-booking/applications'
+    ? `/supply-chain/load-planning/tasks?taskNumber=${encodeURIComponent(resourceNumber)}&view=planning`
+    : `/link-booking/applications?applicationNumber=${encodeURIComponent(resourceNumber)}&view=detail`
 }
 
 function eventTitle(event: ShipmentCaseEvent): string {
@@ -618,7 +621,7 @@ function eventTitle(event: ShipmentCaseEvent): string {
               </div>
               <RouterLink
                 class="shipment-resource-link"
-                :to="resourceWorkspacePath(binding.resourceType)"
+                :to="resourceWorkspacePath(binding.resourceType, binding.resourceNumber)"
               >
                 打开工作台
                 <UiIcon name="arrow" />
