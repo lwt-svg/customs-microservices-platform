@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import type {
   LinkCarrierSubmission,
   ShipmentAgentCapability,
+  ShipmentAgentRpaJob,
   ShipmentAgentRun,
 } from '@/api/platform'
 import UiIcon from '@/components/UiIcon.vue'
@@ -37,12 +38,34 @@ const loadStages = new Set([
 ])
 
 const bookingStages = new Set([
+  'DISPATCHING_RPA_JOB',
+  'AWAITING_RPA_RESULT',
+  'AWAITING_RPA_ATTENTION',
   'AWAITING_BOOKING_SUBMIT_APPROVAL',
   'SUBMITTING_BOOKING',
   'AWAITING_BOOKING_RESULT',
   'AWAITING_BOOKING_RETRY_APPROVAL',
   'AWAITING_BOOKING_REPLACEMENT',
 ])
+
+/**
+ * 一条 Shipment Run 以后可能绑定多次 RPA 尝试，所以响应使用数组。
+ *
+ * LINK 卡片只读取 LINK_BOOKING_STAGE，并优先展示 binding sequence 最大的一条；
+ * 页面不会根据更新时间猜测另一业务域的 Job 是否属于当前订舱步骤。
+ */
+const latestLinkRpaJob = computed<ShipmentAgentRpaJob | null>(() => {
+  const jobs = props.run.rpaJobs ?? []
+  return (
+    [...jobs]
+      .filter((job) => job.operation === 'LINK_BOOKING_STAGE')
+      .sort(
+        (left, right) =>
+          right.sequence - left.sequence ||
+          new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+      )[0] ?? null
+  )
+})
 
 const workstreams = computed<WorkstreamView[]>(() => [
   buildLoadWorkstream(),
@@ -185,6 +208,35 @@ function carrierStatusLabel(value: string): string {
   )
 }
 
+const rpaStatusLabels: Record<ShipmentAgentRpaJob['status'], string> = {
+  CREATED: '任务已创建',
+  QUEUED: '等待机器人领取',
+  RUNNING: '机器人执行中',
+  WAITING_HUMAN: '等待人工处理',
+  SUCCEEDED: '自动填单完成',
+  RETRYABLE_FAILED: '等待受控重试',
+  FAILED: '自动填单失败',
+  RESULT_UNKNOWN: '外部结果待核对',
+  SITE_VERSION_UNKNOWN: '网站版本待确认',
+  CANCELLED: '任务已取消',
+}
+
+function rpaStatusLabel(job: ShipmentAgentRpaJob): string {
+  const environment = job.environment === 'SANDBOX' ? '沙箱' : '生产'
+  return `${rpaStatusLabels[job.status]} · ${environment}`
+}
+
+function rpaNeedsAttention(job: ShipmentAgentRpaJob): boolean {
+  return [
+    'WAITING_HUMAN',
+    'RETRYABLE_FAILED',
+    'FAILED',
+    'RESULT_UNKNOWN',
+    'SITE_VERSION_UNKNOWN',
+    'CANCELLED',
+  ].includes(job.status)
+}
+
 function buildBookingWorkstream(): WorkstreamView {
   const policyConfirmed = props.run.scenarioPolicyConfirmed
   const required = props.run.requiredCapabilities.includes('LINK_BOOKING')
@@ -192,6 +244,12 @@ function buildBookingWorkstream(): WorkstreamView {
   const reference = props.run.selectedBookingApplicationNumber
   const confirmed = props.run.bookingStatus === 'CONFIRMED'
   const inStage = bookingStages.has(props.run.currentStage)
+  const rpaJob = latestLinkRpaJob.value
+  const inRpaStage = [
+    'DISPATCHING_RPA_JOB',
+    'AWAITING_RPA_RESULT',
+    'AWAITING_RPA_ATTENTION',
+  ].includes(props.run.currentStage)
 
   let state: WorkstreamView['state'] = !policyConfirmed
     ? 'waiting'
@@ -216,12 +274,29 @@ function buildBookingWorkstream(): WorkstreamView {
     description = 'LINK 已收到异步确认，订舱参考号已回写到专业系统。'
   } else if (enabled && inStage) {
     state =
-      ['SUBMITTING_BOOKING', 'AWAITING_BOOKING_RESULT'].includes(
+      [
+        'DISPATCHING_RPA_JOB',
+        'AWAITING_RPA_RESULT',
+        'SUBMITTING_BOOKING',
+        'AWAITING_BOOKING_RESULT',
+      ].includes(
         props.run.currentStage,
       )
         ? 'waiting'
         : 'attention'
     const copy: Partial<Record<ShipmentAgentRun['currentStage'], [string, string]>> = {
+      DISPATCHING_RPA_JOB: [
+        '正在派发机器人',
+        '系统正在按稳定业务身份创建或复用 LINK 自动填单任务。',
+      ],
+      AWAITING_RPA_RESULT: [
+        '机器人自动填单中',
+        '独立 Worker 正在填写并保存 LINK 草稿；流程会异步读取结果。',
+      ],
+      AWAITING_RPA_ATTENTION: [
+        '自动填单待处理',
+        '机器人已安全暂停写操作，需要根据保留的步骤和错误码核对现场。',
+      ],
       AWAITING_BOOKING_SUBMIT_APPROVAL: [
         '等待提交批准',
         '七步填单草稿已就绪，提交外部系统前必须人工确认。',
@@ -244,6 +319,9 @@ function buildBookingWorkstream(): WorkstreamView {
       '需要处理',
       '订舱作业正在等待业务人员处理。',
     ]
+    if (inRpaStage && rpaJob?.currentStep) {
+      description = `${description} 当前步骤：${rpaJob.currentStep}`
+    }
   } else if (enabled && !reference) {
     state = 'attention'
     statusLabel = '缺少绑定'
@@ -264,11 +342,16 @@ function buildBookingWorkstream(): WorkstreamView {
     state,
     statusLabel,
     description,
-    metricLabel: '承运人进度',
+    metricLabel:
+      rpaJob && (inRpaStage || !props.run.carrierSubmissionStatus)
+        ? '自动填单进度'
+        : '承运人进度',
     metricValue: !policyConfirmed
       ? '待确认'
       : !required
         ? '不适用'
+        : rpaJob && (inRpaStage || !props.run.carrierSubmissionStatus)
+          ? rpaStatusLabel(rpaJob)
         : props.run.carrierSubmissionStatus
           ? carrierStatusLabel(props.run.carrierSubmissionStatus)
           : bookingStatusLabel(props.run.bookingStatus),
@@ -327,6 +410,34 @@ function buildBookingWorkstream(): WorkstreamView {
             <dd>{{ workstream.metricValue }}</dd>
           </div>
         </dl>
+
+        <div
+          v-if="
+            workstream.capability === 'LINK_BOOKING' &&
+            latestLinkRpaJob
+          "
+          class="rpa-job-summary"
+          :data-attention="rpaNeedsAttention(latestLinkRpaJob)"
+        >
+          <div>
+            <span>RPA JOB #{{ latestLinkRpaJob.sequence }}</span>
+            <strong>{{ rpaStatusLabel(latestLinkRpaJob) }}</strong>
+            <code>{{ latestLinkRpaJob.jobId }}</code>
+          </div>
+          <p>{{ latestLinkRpaJob.currentStep }}</p>
+          <small v-if="latestLinkRpaJob.businessOutcome">
+            业务结果：{{ latestLinkRpaJob.businessOutcome }}
+            <template v-if="latestLinkRpaJob.externalReference">
+              · 外部编号 {{ latestLinkRpaJob.externalReference }}
+            </template>
+          </small>
+          <small v-else-if="latestLinkRpaJob.errorCode">
+            错误码：{{ latestLinkRpaJob.errorCode }}。系统未把技术异常冒充业务失败。
+          </small>
+          <small v-else>
+            副作用阶段：{{ latestLinkRpaJob.sideEffectPhase }}
+          </small>
+        </div>
 
         <div
           v-if="
@@ -542,6 +653,60 @@ function buildBookingWorkstream(): WorkstreamView {
   background: #fff7ea;
   font-size: 11px;
   line-height: 1.55;
+}
+
+.rpa-job-summary {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 10px;
+  border: 1px solid #d7e4de;
+  border-radius: 9px;
+  background: #f5f9f7;
+}
+
+.rpa-job-summary[data-attention="true"] {
+  border-color: #e8c9a8;
+  background: #fff7ea;
+}
+
+.rpa-job-summary > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: baseline;
+}
+
+.rpa-job-summary span,
+.rpa-job-summary small {
+  color: #73817b;
+  font-size: 10px;
+}
+
+.rpa-job-summary strong {
+  color: #355d4f;
+  font-size: 11px;
+  text-align: right;
+}
+
+.rpa-job-summary code {
+  overflow: hidden;
+  grid-column: 1 / -1;
+  color: #7a8782;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rpa-job-summary p {
+  margin: 0;
+  color: #4e5c57;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.rpa-job-summary small {
+  line-height: 1.5;
 }
 
 .uncertain-command :deep(.ui-icon) {

@@ -365,6 +365,9 @@ export type ShipmentAgentStage =
   | 'AWAITING_LOAD_REVIEW'
   | 'AWAITING_LOAD_RELEASE'
   | 'AWAITING_LOAD_REPLAN'
+  | 'DISPATCHING_RPA_JOB'
+  | 'AWAITING_RPA_RESULT'
+  | 'AWAITING_RPA_ATTENTION'
   | 'AWAITING_BOOKING_SUBMIT_APPROVAL'
   | 'SUBMITTING_BOOKING'
   | 'AWAITING_BOOKING_RESULT'
@@ -552,6 +555,41 @@ export interface ShipmentAgentChild {
 }
 
 /**
+ * 总 Agent 当前关联的一条 RPA Job 安全摘要。
+ *
+ * 浏览器只需要知道自动填单执行到哪里、是否已经形成外部草稿，以及是否需要人工关注。
+ * 原始业务 payload、Worker attempt token、幂等键和领取凭据不会经过 Java BFF 返回页面。
+ */
+export interface ShipmentAgentRpaJob {
+  jobId: string
+  sequence: number
+  domain: 'LINK' | 'SINGLE_WINDOW'
+  operation: 'LINK_BOOKING_STAGE' | 'COO_STAGE' | 'CIQ_STAGE'
+  environment: 'SANDBOX' | 'PRODUCTION'
+  status:
+    | 'CREATED'
+    | 'QUEUED'
+    | 'RUNNING'
+    | 'WAITING_HUMAN'
+    | 'SUCCEEDED'
+    | 'RETRYABLE_FAILED'
+    | 'FAILED'
+    | 'RESULT_UNKNOWN'
+    | 'SITE_VERSION_UNKNOWN'
+    | 'CANCELLED'
+  currentStep: string
+  sideEffectPhase:
+    | 'READ_ONLY'
+    | 'LOCAL_PREPARED'
+    | 'EXTERNAL_MUTATION_STARTED'
+    | 'EXTERNAL_EFFECT_CONFIRMED'
+  businessOutcome: 'LINK_DRAFT_SAVED' | 'COO_STAGED' | 'CIQ_STAGED' | null
+  externalReference: string | null
+  errorCode: string | null
+  updatedAt: string
+}
+
+/**
  * Shipment Agent 的业务快照。
  *
  * selected*、booking* 和 locked* 字段都来自源系统观察结果；Vue 不会根据案件绑定记录
@@ -590,6 +628,7 @@ export interface ShipmentAgentRun {
   pendingInterrupt: ShipmentAgentInterrupt | null
   allowedActions: ShipmentAgentAction[]
   childAgent: ShipmentAgentChild | null
+  rpaJobs: ShipmentAgentRpaJob[]
   createdAt: string
   updatedAt: string
   completedAt: string | null

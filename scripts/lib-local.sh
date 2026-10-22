@@ -617,6 +617,9 @@ load_local_environment() {
   export SHIPMENT_AGENT_WAKE_RECOVERY_GRACE_SECONDS="${SHIPMENT_AGENT_WAKE_RECOVERY_GRACE_SECONDS:-120}"
   export SHIPMENT_AGENT_WAKE_RETRY_BASE_SECONDS="${SHIPMENT_AGENT_WAKE_RETRY_BASE_SECONDS:-2}"
   export SHIPMENT_AGENT_WAKE_RETRY_MAX_SECONDS="${SHIPMENT_AGENT_WAKE_RETRY_MAX_SECONDS:-60}"
+  export RPA_SANDBOX_PORTAL_ENABLED="${RPA_SANDBOX_PORTAL_ENABLED:-true}"
+  export RPA_SANDBOX_AUTO_LINK_WORKER_ENABLED="${RPA_SANDBOX_AUTO_LINK_WORKER_ENABLED:-true}"
+  export RPA_WORKER_POLL_SECONDS="${RPA_WORKER_POLL_SECONDS:-2}"
 
   # 第 23.9 章的智能解读是可选旁路。旧 .env.local 没有这些字段时保持关闭，
   # 因而普通的一键启动不会调用 Codex/OpenAI，也不会产生模型费用。
@@ -1134,6 +1137,47 @@ start_load_planning_service() {
   record_load_planning_insight_mode
 }
 
+start_link_rpa_worker() {
+  local service_directory="${REPO_ROOT}/services/load-planning-service"
+  local log_path="${LOG_DIR}/link-rpa-worker.log"
+  local managed_pid=""
+
+  case "${RPA_SANDBOX_AUTO_LINK_WORKER_ENABLED:-true}" in
+    true | TRUE | 1 | yes | YES | on | ON)
+      ;;
+    false | FALSE | 0 | no | NO | off | OFF)
+      info "LINK Sandbox RPA Worker 已按配置关闭。"
+      return 0
+      ;;
+    *)
+      die "RPA_SANDBOX_AUTO_LINK_WORKER_ENABLED 只能是 true 或 false。"
+      ;;
+  esac
+
+  "${PYTHON_BIN}" -c 'import playwright' >/dev/null 2>&1 \
+    || die "缺少 Playwright。请先在仓库根目录运行：python -m pip install -r requirements-local.txt"
+
+  if managed_pid="$(read_managed_pid "link-rpa-worker")"; then
+    if process_command_matches "${managed_pid}" 'app\.rpa\.browser_worker.*--domain LINK'; then
+      info "LINK Sandbox RPA Worker 已运行（PID ${managed_pid}），复用该进程。"
+      return 0
+    fi
+  fi
+
+  start_managed_process \
+    "link-rpa-worker" \
+    "${service_directory}" \
+    'app\.rpa\.browser_worker.*--domain LINK' \
+    "${log_path}" \
+    "${PYTHON_BIN}" -m app.rpa.browser_worker \
+      --domain LINK \
+      --poll-seconds "${RPA_WORKER_POLL_SECONDS}"
+  sleep 1
+  read_managed_pid "link-rpa-worker" >/dev/null 2>&1 \
+    || die "LINK Sandbox RPA Worker 启动后退出。请查看日志：${log_path}"
+  info "LINK Sandbox RPA Worker 已就绪。"
+}
+
 start_java_bff() {
   local service_directory="${REPO_ROOT}/platform-bff"
   local log_path="${LOG_DIR}/platform-bff.log"
@@ -1306,6 +1350,9 @@ managed_process_pattern() {
     platform-web | carrier-simulator-web)
       printf '%s\n' 'node.*vite'
       ;;
+    link-rpa-worker)
+      printf '%s\n' 'app\.rpa\.browser_worker.*--domain LINK'
+      ;;
     *)
       return 1
       ;;
@@ -1387,4 +1434,20 @@ print_process_status() {
   else
     printf '%-24s STOPPED  (port %s)\n' "${service_name}" "${port}"
   fi
+}
+
+print_background_process_status() {
+  local service_name="$1"
+  local expected_pattern="$2"
+  local pid
+
+  if pid="$(read_managed_pid "${service_name}")"; then
+    if process_command_matches "${pid}" "${expected_pattern}"; then
+      printf '%-24s RUNNING  managed PID %s\n' "${service_name}" "${pid}"
+      return 0
+    fi
+    printf '%-24s WARNING  stale PID record\n' "${service_name}"
+    return 0
+  fi
+  printf '%-24s STOPPED\n' "${service_name}"
 }

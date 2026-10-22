@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.models.shipment_agent_run import (
     SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON,
     ShipmentAgentCommand,
+    ShipmentAgentRpaJobBinding,
     ShipmentAgentRun,
     ShipmentAgentRunStatus,
     ShipmentAgentStage,
@@ -56,6 +57,9 @@ class ShipmentAgentRunRepository:
             ),
             selectinload(ShipmentAgentRun.events),
             selectinload(ShipmentAgentRun.notifications),
+            selectinload(ShipmentAgentRun.rpa_job_bindings).selectinload(
+                ShipmentAgentRpaJobBinding.job
+            ),
         )
 
     async def get(
@@ -245,6 +249,26 @@ class ShipmentAgentRunRepository:
             lease_is_free_or_expired,
         )
 
+    @staticmethod
+    def _due_rpa_attention_wake_clause(now: datetime):
+        """只接受 RPA 控制面显式写入的单次唤醒。
+
+        ``AWAITING_RPA_ATTENTION`` 不能使用“next_wake_at 为空且记录较旧”的通用卡死恢复，
+        否则人工尚未完成对账时会被后台不断领取。Job 回调、对账或重排事务会写入一个
+        明确的 ``next_wake_at``，消费后投影将其清空，直到下一次真实 Job 变化。
+        """
+
+        return and_(
+            ShipmentAgentRun.status == ShipmentAgentRunStatus.WAITING_RESOURCE,
+            ShipmentAgentRun.current_stage == ShipmentAgentStage.AWAITING_RPA_ATTENTION,
+            ShipmentAgentRun.next_wake_at.is_not(None),
+            ShipmentAgentRun.next_wake_at <= now,
+            or_(
+                ShipmentAgentRun.wake_lease_until.is_(None),
+                ShipmentAgentRun.wake_lease_until <= now,
+            ),
+        )
+
     @classmethod
     def _wake_claimable_clause(
         cls,
@@ -270,6 +294,7 @@ class ShipmentAgentRunRepository:
         )
         return or_(
             normally_due,
+            cls._due_rpa_attention_wake_clause(now),
             cls._expired_projection_lease_clause(now),
             cls._due_control_projection_repair_clause(now),
         )

@@ -2,6 +2,24 @@
 
 这些脚本只管理个人学习仓库的本地进程。它们会把日志放在 `runtime/logs/`，把自己启动的 PID 放在 `runtime/pids/`；两者都不会进入 Git。
 
+仓库同时提供两套入口：
+
+- `*.sh`：macOS / Linux；
+- `windows/*.ps1`：Windows PowerShell + Conda + Docker Desktop。
+
+Windows 首次安装、依赖下载和日常启动请先看仓库根目录 `README.md` 的
+“Windows：Conda + Docker Desktop”。PowerShell 和 Bash 使用相同的 `.env.local`、
+端口、数据库 schema 与健康检查，不是两套业务代码。
+
+RPA 相关入口：
+
+- `rpa-sandbox-e2e.py`：通过真实 Chromium 验证 LINK、COO、CIQ 三条本地闭环；
+- `windows/run-link-worker.ps1`：手工观察 LINK Sandbox Worker；
+- `windows/run-single-window-worker.ps1`：在 Windows 交互式桌面运行单一窗口 Worker。
+
+单一窗口脚本当前只连接本地 Sandbox；`-SandboxUKeyPresent` 只是测试开关，不会读取
+真实 UKey。正式环境必须使用独立 Adapter、SelectorPack 和企业安全配置。
+
 先准备一次本地配置：
 
 ```bash

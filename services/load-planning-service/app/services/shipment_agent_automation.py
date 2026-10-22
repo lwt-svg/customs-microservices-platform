@@ -58,6 +58,9 @@ _OWNER_BY_STAGE: dict[ShipmentAgentStage, str] = {
     ShipmentAgentStage.AWAITING_BOOKING_RESULT: "BOOKING_OPERATOR",
     ShipmentAgentStage.AWAITING_BOOKING_RETRY_APPROVAL: "BOOKING_OPERATOR",
     ShipmentAgentStage.AWAITING_BOOKING_REPLACEMENT: "BOOKING_OPERATOR",
+    ShipmentAgentStage.DISPATCHING_RPA_JOB: "SYSTEM",
+    ShipmentAgentStage.AWAITING_RPA_RESULT: "RPA_OPERATOR",
+    ShipmentAgentStage.AWAITING_RPA_ATTENTION: "RPA_OPERATOR",
     ShipmentAgentStage.AWAITING_COMPLETION_APPROVAL: "SHIPMENT_MANAGER",
     ShipmentAgentStage.FAILED: "SHIPMENT_COORDINATOR",
 }
@@ -365,6 +368,11 @@ class ShipmentAgentAutomationService:
                 "RECOVER_RUNNING_STEP",
             )
         if run.status is ShipmentAgentRunStatus.WAITING_EXTERNAL:
+            if run.current_stage is ShipmentAgentStage.AWAITING_RPA_RESULT:
+                return (
+                    now_database + timedelta(seconds=self.wait_seconds),
+                    "POLL_RPA_JOB_STATUS",
+                )
             return (
                 now_database + timedelta(seconds=self.wait_seconds),
                 "POLL_LINK_STATUS",
@@ -412,6 +420,18 @@ class ShipmentAgentAutomationService:
             )
 
         if run.status is ShipmentAgentRunStatus.WAITING_RESOURCE:
+            if run.current_stage is ShipmentAgentStage.AWAITING_RPA_ATTENTION:
+                return _NotificationSpec(
+                    dedupe_key=dedupe_key,
+                    notification_type=(ShipmentAgentNotificationType.RESOURCE_ATTENTION),
+                    severity=ShipmentAgentNotificationSeverity.WARNING,
+                    title="RPA Job 需要人工核对",
+                    message=(
+                        run.failure_message
+                        or "请在 RPA 控制面处理登录、页面版本或未知结果，再继续本票流程。"
+                    ),
+                    owner_role=owner_role,
+                )
             child = run.child_agent_snapshot or {}
             message = str(
                 child.get("next_action")
@@ -428,6 +448,17 @@ class ShipmentAgentAutomationService:
             )
 
         if run.status is ShipmentAgentRunStatus.WAITING_EXTERNAL:
+            if run.current_stage is ShipmentAgentStage.AWAITING_RPA_RESULT:
+                return _NotificationSpec(
+                    dedupe_key=dedupe_key,
+                    notification_type=ShipmentAgentNotificationType.EXTERNAL_WAIT,
+                    severity=ShipmentAgentNotificationSeverity.INFO,
+                    title="LINK 自动填单正在执行",
+                    message=(
+                        "系统正在异步等待 RPA Job；请勿重复创建或手工重复保存同一草稿。"
+                    ),
+                    owner_role=owner_role,
+                )
             return _NotificationSpec(
                 dedupe_key=dedupe_key,
                 notification_type=ShipmentAgentNotificationType.EXTERNAL_WAIT,

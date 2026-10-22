@@ -14,14 +14,18 @@ from app.api.agent_runs import router as agent_runs_router
 from app.api.load_planning_tasks import router as load_planning_tasks_router
 from app.api.packing_list_imports import router as packing_list_imports_router
 from app.api.plan_versions import router as plan_versions_router
+from app.api.rpa_jobs import router as rpa_jobs_router
+from app.api.rpa_sandbox import router as rpa_sandbox_router
 from app.api.shipment_agent_runs import router as shipment_agent_runs_router
 from app.api.shipment_cases import router as shipment_cases_router
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.integrations.nacos_registry import NacosServiceRegistry
 from app.integrations.shipment_agent_resources import HttpLinkBookingClient
+from app.services.rpa_jobs import RpaJobService
 from app.services.shipment_agent_automation import ShipmentAgentAutomationService
 from app.services.shipment_agent_runs import ShipmentAgentService
+from app.workers.rpa_lease_recovery_worker import RpaLeaseRecoveryWorker
 from app.workers.shipment_agent_wake_worker import ShipmentAgentWakeWorker
 from app.workflows.shipment_case import ShipmentWorkflowOrchestrator
 
@@ -33,6 +37,23 @@ async def _stop_wake_worker(
     task: asyncio.Task[None],
 ) -> None:
     """先请求优雅停止；超时后取消任务，未完成租约会在数据库中自动过期。"""
+
+    worker.stop()
+    try:
+        await asyncio.wait_for(task, timeout=5)
+    except TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _stop_rpa_recovery_worker(
+    worker: RpaLeaseRecoveryWorker,
+    task: asyncio.Task[None],
+) -> None:
+    """停止进程内 RPA 恢复循环；数据库状态会保留到下一次启动继续处理。"""
 
     worker.stop()
     try:
@@ -88,6 +109,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     timeout_seconds=(settings.shipment_resource_verify_timeout_seconds),
                 ),
                 app.state.load_planning_checkpointer,
+                rpa_enabled=settings.shipment_agent_rpa_enabled,
+                rpa_environment=settings.shipment_agent_rpa_environment,
+                rpa_adapter_key=settings.shipment_agent_rpa_adapter_key,
+                rpa_selector_pack_version=(
+                    settings.shipment_agent_rpa_selector_pack_version
+                ),
             )
             shipment_workflow = ShipmentWorkflowOrchestrator(
                 service=shipment_service,
@@ -113,6 +140,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else:
             app.state.shipment_agent_wake_worker = None
             logger.info("Shipment Agent 自动唤醒器已关闭。")
+
+        if settings.rpa_lease_recovery_worker_enabled:
+            rpa_recovery_worker = RpaLeaseRecoveryWorker(
+                service=RpaJobService(
+                    SessionLocal,
+                    worker_lease_seconds=settings.rpa_worker_lease_seconds,
+                    production_dispatch_enabled=(settings.rpa_production_dispatch_enabled),
+                ),
+                poll_seconds=settings.rpa_lease_recovery_poll_seconds,
+                batch_size=settings.rpa_lease_recovery_batch_size,
+            )
+            rpa_recovery_task = asyncio.create_task(
+                rpa_recovery_worker.run_forever(),
+                name="rpa-lease-recovery-worker",
+            )
+            app.state.rpa_lease_recovery_worker = rpa_recovery_worker
+            stack.push_async_callback(
+                _stop_rpa_recovery_worker,
+                rpa_recovery_worker,
+                rpa_recovery_task,
+            )
+        else:
+            app.state.rpa_lease_recovery_worker = None
+            logger.info("RPA 租约恢复器已关闭。")
 
         registry: NacosServiceRegistry | None = None
         if settings.nacos_discovery_enabled:
@@ -148,6 +199,8 @@ app.include_router(agent_runs_router, prefix=settings.api_prefix)
 app.include_router(plan_versions_router, prefix=settings.api_prefix)
 app.include_router(shipment_cases_router, prefix=settings.api_prefix)
 app.include_router(shipment_agent_runs_router, prefix=settings.api_prefix)
+app.include_router(rpa_jobs_router, prefix=settings.api_prefix)
+app.include_router(rpa_sandbox_router, prefix=settings.api_prefix)
 
 
 @app.get("/health/live", tags=["health"])

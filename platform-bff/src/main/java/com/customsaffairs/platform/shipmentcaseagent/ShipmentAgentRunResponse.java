@@ -42,6 +42,7 @@ public record ShipmentAgentRunResponse(
         ShipmentAgentPendingInterruptResponse pendingInterrupt,
         List<ShipmentAgentAction> allowedActions,
         ShipmentAgentChildResponse childAgent,
+        List<ShipmentAgentRpaJobResponse> rpaJobs,
         String createdAt,
         String updatedAt,
         String completedAt,

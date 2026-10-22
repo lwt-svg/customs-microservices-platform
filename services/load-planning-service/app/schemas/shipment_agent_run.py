@@ -19,6 +19,14 @@ from app.models.shipment_agent_run import (
     ShipmentAgentStage,
 )
 from app.models.shipment_case import ShipmentResourceType
+from app.rpa.contracts import (
+    RpaBusinessOutcome,
+    RpaDomain,
+    RpaEnvironment,
+    RpaJobStatus,
+    RpaOperation,
+    RpaSideEffectPhase,
+)
 from app.schemas.shipment_data_readiness import (
     ShipmentDataFactInput,
     ShipmentDataReadinessRead,
@@ -212,6 +220,35 @@ class ShipmentAgentNotificationRead(BaseModel):
         return value.astimezone(UTC)
 
 
+class ShipmentAgentRpaJobRead(BaseModel):
+    """Shipment 页面可以读取的一条 RPA Job 安全摘要。
+
+    这里故意不包含 ``business_payload``、稳定幂等键、``attempt_token``、Worker 身份
+    或页面证据。浏览器只需要知道任务走到哪一步以及外部草稿是否已经确认，敏感执行
+    数据始终留在 Python RPA 控制面。
+    """
+
+    job_id: str
+    sequence: int
+    domain: RpaDomain
+    operation: RpaOperation
+    environment: RpaEnvironment
+    status: RpaJobStatus
+    current_step: str
+    side_effect_phase: RpaSideEffectPhase
+    business_outcome: RpaBusinessOutcome | None
+    external_reference: str | None
+    error_code: str | None
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def normalize_updated_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
 class ShipmentAgentRunRead(BaseModel):
     """总 Agent 页面、Agent Center 和 BFF 共用的完整运行视图。"""
 
@@ -242,6 +279,7 @@ class ShipmentAgentRunRead(BaseModel):
     pending_interrupt: ShipmentAgentInterruptRead | None
     allowed_actions: list[ShipmentAgentAction]
     child_agent: ShipmentAgentChildRead | None
+    rpa_jobs: list[ShipmentAgentRpaJobRead] = Field(default_factory=list)
     next_wake_at: datetime | None = None
     wake_reason: str | None = None
     failure_code: str | None

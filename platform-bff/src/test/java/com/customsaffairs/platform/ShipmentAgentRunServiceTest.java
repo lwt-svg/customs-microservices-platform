@@ -135,6 +135,18 @@ class ShipmentAgentRunServiceTest {
         assertThat(response.childAgent().runId()).isEqualTo("LOAD-RUN-0001");
         assertThat(response.childAgent().nextAction())
                 .isEqualTo("OPEN_LOAD_WORKBENCH");
+        assertThat(response.rpaJobs()).hasSize(1);
+        var rpaJob = response.rpaJobs().getFirst();
+        assertThat(rpaJob.jobId()).isEqualTo("RPA-JOB-0001");
+        assertThat(rpaJob.sequence()).isEqualTo(1);
+        assertThat(rpaJob.domain()).isEqualTo("LINK");
+        assertThat(rpaJob.operation()).isEqualTo("LINK_BOOKING_STAGE");
+        assertThat(rpaJob.environment()).isEqualTo("SANDBOX");
+        assertThat(rpaJob.status()).isEqualTo("SUCCEEDED");
+        assertThat(rpaJob.sideEffectPhase())
+                .isEqualTo("EXTERNAL_EFFECT_CONFIRMED");
+        assertThat(rpaJob.businessOutcome()).isEqualTo("LINK_DRAFT_SAVED");
+        assertThat(rpaJob.externalReference()).isEqualTo("LINK-DEMO-0001");
         assertThat(response.events().getFirst().eventType())
                 .isEqualTo("HUMAN_APPROVAL_REQUIRED");
         assertThat(response.events().getFirst().data())
@@ -169,6 +181,26 @@ class ShipmentAgentRunServiceTest {
         assertThat(response.nextWakeAt())
                 .isEqualTo("2026-10-16T02:15:00Z");
         assertThat(response.wakeReason()).isEqualTo("POLL_LINK_STATUS");
+        mockServer.verify();
+    }
+
+    @Test
+    void shouldKeepEarlierShipmentRunsCompatibleWhenRpaProjectionIsAbsent() {
+        mockServer.expect(once(), requestTo(
+                        "http://127.0.0.1:8010/api/v1/shipment-agent-runs/"
+                                + "SHIP-RUN-0001"))
+                .andExpect(method(HttpMethod.GET))
+                // V1/V2 历史运行没有 rpa_jobs。把测试字段改成未知字段，验证 BFF
+                // 不会要求历史响应补造 RPA 数据，并统一向 Vue 返回空数组。
+                .andRespond(withSuccess(
+                        runJson().replace(
+                                "\"rpa_jobs\":",
+                                "\"future_rpa_jobs\":"),
+                        MediaType.APPLICATION_JSON));
+
+        var response = service.getRun("SHIP-RUN-0001");
+
+        assertThat(response.rpaJobs()).isEmpty();
         mockServer.verify();
     }
 
@@ -613,6 +645,24 @@ class ShipmentAgentRunServiceTest {
                     "run_version": 2,
                     "next_action": "OPEN_LOAD_WORKBENCH"
                   },
+                  "rpa_jobs": [{
+                    "job_id": "RPA-JOB-0001",
+                    "sequence": 1,
+                    "domain": "LINK",
+                    "operation": "LINK_BOOKING_STAGE",
+                    "environment": "SANDBOX",
+                    "status": "SUCCEEDED",
+                    "current_step": "草稿已保存并完成对账",
+                    "side_effect_phase": "EXTERNAL_EFFECT_CONFIRMED",
+                    "business_outcome": "LINK_DRAFT_SAVED",
+                    "external_reference": "LINK-DEMO-0001",
+                    "error_code": null,
+                    "updated_at": "2026-10-16T02:09:00Z",
+                    "business_payload": {
+                      "must_not_reach_browser": true
+                    },
+                    "attempt_token": "must-not-reach-browser"
+                  }],
                   "created_at": "2026-10-16T02:00:00Z",
                   "updated_at": "2026-10-16T02:10:00Z",
                   "completed_at": null,

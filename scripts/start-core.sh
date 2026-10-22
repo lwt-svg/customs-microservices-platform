@@ -59,6 +59,7 @@ create_learning_schemas
 start_link_service
 record_link_mode core
 start_load_planning_service
+start_link_rpa_worker
 start_java_bff
 verify_core_bff_chains
 start_platform_web

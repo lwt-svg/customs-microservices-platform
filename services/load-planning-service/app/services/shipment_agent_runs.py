@@ -18,7 +18,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.integrations.shipment_agent_resources import (
+    LINK_RPA_DRAFT_PAYLOAD_VERSION,
     LinkBookingGateway,
     LinkBookingNotFoundError,
     LinkBookingProtocolError,
@@ -44,6 +45,7 @@ from app.models.shipment_agent_run import (
     ShipmentAgentCommandType,
     ShipmentAgentEvent,
     ShipmentAgentInterruptType,
+    ShipmentAgentRpaJobBinding,
     ShipmentAgentRun,
     ShipmentAgentRunStatus,
     ShipmentAgentStage,
@@ -65,7 +67,16 @@ from app.repositories.shipment_agent_runs import ShipmentAgentRunRepository
 from app.repositories.shipment_data_readiness import (
     ShipmentDataReadinessRepository,
 )
+from app.rpa.contracts import (
+    RpaBusinessOutcome,
+    RpaDomain,
+    RpaEnvironment,
+    RpaJobStatus,
+    RpaOperation,
+    RpaSideEffectBoundary,
+)
 from app.schemas.agent_run import AgentRunCreate
+from app.schemas.rpa_job import RpaJobDispatch
 from app.schemas.shipment_agent_run import (
     ShipmentAgentChildRead,
     ShipmentAgentEventRead,
@@ -73,6 +84,7 @@ from app.schemas.shipment_agent_run import (
     ShipmentAgentNotificationRead,
     ShipmentAgentReconcile,
     ShipmentAgentResume,
+    ShipmentAgentRpaJobRead,
     ShipmentAgentRunRead,
     ShipmentAgentStart,
 )
@@ -83,6 +95,11 @@ from app.schemas.shipment_data_readiness import (
 )
 from app.services.agent_runs import StatefulPalletAgentService
 from app.services.plan_versions import LoadPlanVersionService
+from app.services.rpa_jobs import (
+    RpaJobConflictError,
+    RpaJobService,
+    RpaJobValidationError,
+)
 from app.services.shipment_cases import ShipmentCaseService
 from app.services.shipment_data_readiness import (
     SHIPMENT_DATA_READINESS_POLICY_VERSION,
@@ -90,7 +107,10 @@ from app.services.shipment_data_readiness import (
 )
 from app.workflows.load_planning import LoadPlanningWorkflowOrchestrator
 
-SHIPMENT_AGENT_WORKFLOW_VERSION = "SHIPMENT_COORDINATOR_LANGGRAPH_V2"
+SHIPMENT_AGENT_WORKFLOW_VERSION_V2 = "SHIPMENT_COORDINATOR_LANGGRAPH_V2"
+SHIPMENT_AGENT_WORKFLOW_VERSION_V3 = "SHIPMENT_COORDINATOR_LANGGRAPH_V3"
+# Graph 本身同时兼容历史 V1/V2 运行；这个常量只表示当前图定义版本。
+SHIPMENT_AGENT_WORKFLOW_VERSION = SHIPMENT_AGENT_WORKFLOW_VERSION_V3
 SYSTEM_DEMO_ACTOR_SUBJECT = "SYSTEM_DEMO"
 SYSTEM_DEMO_ACTOR_SOURCE = "SHIPMENT_COORDINATOR_AGENT"
 
@@ -107,6 +127,8 @@ _AUTOMATICALLY_ROUTABLE_RUNNING_STAGES = {
     ShipmentAgentStage.SYNCING_CASE,
     ShipmentAgentStage.ASSESSING_DATA_READINESS,
     ShipmentAgentStage.STARTING_LOAD_AGENT,
+    ShipmentAgentStage.DISPATCHING_RPA_JOB,
+    ShipmentAgentStage.AWAITING_RPA_RESULT,
     ShipmentAgentStage.AWAITING_BOOKING_RESULT,
     ShipmentAgentStage.AWAITING_CASE_ACTIVATION,
     ShipmentAgentStage.SUBMITTING_BOOKING,
@@ -194,6 +216,11 @@ class ShipmentAgentService:
         checkpointer: BaseCheckpointSaver[Any],
         *,
         running_recovery_seconds: float | None = None,
+        rpa_enabled: bool | None = None,
+        rpa_environment: RpaEnvironment | str | None = None,
+        rpa_adapter_key: str | None = None,
+        rpa_selector_pack_version: str | None = None,
+        rpa_job_service: RpaJobService | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.link_gateway = link_gateway
@@ -202,6 +229,32 @@ class ShipmentAgentService:
             running_recovery_seconds
             if running_recovery_seconds is not None
             else settings.shipment_agent_wake_recovery_grace_seconds
+        )
+        # ``rpa_enabled`` 只决定“新运行”创建为 V2 还是 V3。已经创建的 V3 运行始终根据
+        # 自己持久化的 workflow_version 继续，避免一次配置切换把半途流程变回旧语义。
+        self.rpa_enabled = (
+            rpa_enabled if rpa_enabled is not None else settings.shipment_agent_rpa_enabled
+        )
+        configured_environment = (
+            rpa_environment
+            if rpa_environment is not None
+            else settings.shipment_agent_rpa_environment
+        )
+        self.rpa_environment = RpaEnvironment(configured_environment)
+        self.rpa_adapter_key = (
+            rpa_adapter_key
+            if rpa_adapter_key is not None
+            else settings.shipment_agent_rpa_adapter_key
+        )
+        self.rpa_selector_pack_version = (
+            rpa_selector_pack_version
+            if rpa_selector_pack_version is not None
+            else settings.shipment_agent_rpa_selector_pack_version
+        )
+        self.rpa_job_service = rpa_job_service or RpaJobService(
+            session_factory,
+            worker_lease_seconds=settings.rpa_worker_lease_seconds,
+            production_dispatch_enabled=settings.rpa_production_dispatch_enabled,
         )
         # ShipmentCaseService 的状态变更路径不会调用资源验证器。这里仍显式传入空派发器，
         # 复用案件既有的幂等、revision 和审计实现，而不是绕过它直接 UPDATE 主表。
@@ -281,7 +334,11 @@ class ShipmentAgentService:
                         status=ShipmentAgentRunStatus.RUNNING,
                         current_stage=ShipmentAgentStage.SYNCING_CASE,
                         run_version=1,
-                        workflow_version=SHIPMENT_AGENT_WORKFLOW_VERSION,
+                        workflow_version=(
+                            SHIPMENT_AGENT_WORKFLOW_VERSION_V3
+                            if self.rpa_enabled
+                            else SHIPMENT_AGENT_WORKFLOW_VERSION_V2
+                        ),
                         started_case_revision=shipment_case.revision,
                         required_capabilities=[
                             capability.value for capability in (capabilities or [])
@@ -967,6 +1024,45 @@ class ShipmentAgentService:
             ShipmentAgentCapability.LINK_BOOKING.value in capabilities
             and current.booking_status != "CONFIRMED"
         ):
+            if current.workflow_version == SHIPMENT_AGENT_WORKFLOW_VERSION_V3:
+                binding = self._latest_rpa_binding(
+                    current,
+                    RpaOperation.LINK_BOOKING_STAGE,
+                    business_reference=current.selected_booking_application_number,
+                )
+                if binding is None:
+                    return await self._set_running_stage(
+                        run_id,
+                        current.run_version,
+                        ShipmentAgentStage.DISPATCHING_RPA_JOB,
+                        "LINK_RPA_DISPATCH_STARTED",
+                        "准备自动填写 LINK 草稿",
+                        (
+                            "将读取经过校验的 LINK 业务字段，并幂等派发浏览器 RPA Job；"
+                            "XPath、账号和浏览器会话不会进入 LangGraph。"
+                        ),
+                    )
+                if (
+                    binding.job.status is RpaJobStatus.SUCCEEDED
+                    and binding.job.business_outcome
+                    is RpaBusinessOutcome.LINK_DRAFT_SAVED
+                ):
+                    return await self._set_running_stage(
+                        run_id,
+                        current.run_version,
+                        ShipmentAgentStage.AWAITING_BOOKING_RESULT,
+                        "LINK_RPA_DRAFT_ALREADY_READY",
+                        "LINK 草稿已经由 RPA 保存",
+                        "继续进入原有人工提交与承运人异步确认流程。",
+                    )
+                return await self._set_running_stage(
+                    run_id,
+                    current.run_version,
+                    ShipmentAgentStage.AWAITING_RPA_RESULT,
+                    "LINK_RPA_COORDINATION_STARTED",
+                    "开始协调 LINK RPA Job",
+                    "将根据统一 RPA Job 的权威状态决定等待、人工核对或继续订舱。",
+                )
             return await self._set_running_stage(
                 run_id,
                 current.run_version,
@@ -1394,6 +1490,255 @@ class ShipmentAgentService:
             data={"child_agent": child_snapshot},
         )
 
+    async def dispatch_link_rpa_job(self, run_id: str) -> ShipmentAgentRunRead:
+        """为 V3 运行幂等派发 LINK 七步填单 Job，并建立显式绑定。
+
+        远程 LINK 读取和 RPA Job 派发都发生在 Shipment 写事务之外。即使进程在“Job
+        已创建、绑定尚未提交”之间退出，Graph 重放也会因稳定业务幂等键拿回同一个 Job，
+        然后补齐绑定，不会重复创建浏览器写任务。
+        """
+
+        current = await self._get_orm_snapshot(run_id)
+        expected_version = current.run_version
+        if (
+            current.status is not ShipmentAgentRunStatus.RUNNING
+            or current.current_stage is not ShipmentAgentStage.DISPATCHING_RPA_JOB
+            or current.workflow_version != SHIPMENT_AGENT_WORKFLOW_VERSION_V3
+        ):
+            return self._to_read(current)
+
+        application_number = current.selected_booking_application_number
+        if not application_number:
+            return await self._mark_failed(
+                run_id,
+                expected_version,
+                "BOOKING_RESOURCE_MISSING",
+                "派发 LINK RPA 前找不到选中的订舱申请。",
+            )
+
+        try:
+            snapshot = await self.link_gateway.get_detail(application_number)
+        except LinkBookingNotFoundError:
+            return await self._request_booking_replacement(
+                current,
+                "准备自动填单时发现 LINK 申请不存在，请选择替代申请。",
+            )
+        except (LinkBookingUnavailableError, LinkBookingProtocolError) as error:
+            return await self._set_rpa_dispatch_attention(
+                current,
+                error_code=type(error).__name__,
+                message=str(error),
+            )
+
+        # 已提交或已确认的历史申请不应再让 RPA 回头保存草稿。把控制权交回原有 LINK
+        # 状态协调节点，由它判断等待承运人、替换申请或完成订舱。
+        if snapshot.application_status != "DRAFT":
+            return await self._set_running_stage(
+                run_id,
+                expected_version,
+                ShipmentAgentStage.AWAITING_BOOKING_RESULT,
+                "LINK_RPA_NOT_REQUIRED",
+                "当前 LINK 申请无需自动保存草稿",
+                (
+                    f"申请当前状态为 {snapshot.application_status}，"
+                    "将继续使用原有 LINK 状态协调流程。"
+                ),
+            )
+        if snapshot.rpa_payload is None:
+            return await self._set_rpa_dispatch_attention(
+                current,
+                error_code="LINK_RPA_PAYLOAD_UNAVAILABLE",
+                message="LINK 详情没有提供符合 LINK_RPA_DRAFT_V1 的自动填单载荷。",
+            )
+
+        try:
+            job = await self.rpa_job_service.dispatch(
+                RpaJobDispatch(
+                    case_number=current.shipment_case.case_number,
+                    originating_run_id=UUID(current.id),
+                    domain=RpaDomain.LINK,
+                    operation=RpaOperation.LINK_BOOKING_STAGE,
+                    environment=self.rpa_environment,
+                    business_reference=application_number,
+                    side_effect_boundary=RpaSideEffectBoundary.DRAFT_ONLY,
+                    adapter_key=self.rpa_adapter_key,
+                    selector_pack_version=self.rpa_selector_pack_version,
+                    payload_schema_version=LINK_RPA_DRAFT_PAYLOAD_VERSION,
+                    max_attempts=3,
+                    business_payload=snapshot.rpa_payload.model_dump(mode="json"),
+                )
+            )
+        except (RpaJobConflictError, RpaJobValidationError, ValueError) as error:
+            return await self._set_rpa_dispatch_attention(
+                current,
+                error_code=type(error).__name__,
+                message=str(error),
+            )
+
+        try:
+            async with self.session_factory() as session:
+                repository = ShipmentAgentRunRepository(session)
+                async with session.begin():
+                    run = await repository.get(run_id, for_update=True)
+                    if run is None:
+                        raise ShipmentAgentRunNotFoundError("Shipment Agent 运行不存在")
+                    if run.run_version != expected_version:
+                        return self._to_read(run)
+                    if run.status in _TERMINAL_STATUSES:
+                        return self._to_read(run)
+
+                    binding = next(
+                        (
+                            value
+                            for value in run.rpa_job_bindings
+                            if value.job_id == job.job_id
+                        ),
+                        None,
+                    )
+                    newly_bound = binding is None
+                    if binding is None:
+                        binding = ShipmentAgentRpaJobBinding(
+                            run_id=run.id,
+                            job_id=job.job_id,
+                            sequence=max(
+                                (value.sequence for value in run.rpa_job_bindings),
+                                default=0,
+                            )
+                            + 1,
+                            operation=RpaOperation.LINK_BOOKING_STAGE,
+                        )
+                        run.rpa_job_bindings.append(binding)
+
+                    run.status = ShipmentAgentRunStatus.RUNNING
+                    run.current_stage = ShipmentAgentStage.AWAITING_RPA_RESULT
+                    run.pending_interrupt = None
+                    run.allowed_actions = []
+                    run.failure_code = None
+                    run.failure_message = None
+                    self._refresh_automatic_wake_marker(run)
+                    run.run_version += 1
+                    run.events.append(
+                        self._event(
+                            run,
+                            request_id=str(uuid4()),
+                            event_type=(
+                                "LINK_RPA_JOB_DISPATCHED"
+                                if newly_bound
+                                else "LINK_RPA_JOB_REUSED"
+                            ),
+                            title=(
+                                "LINK RPA Job 已派发"
+                                if newly_bound
+                                else "已复用相同 LINK RPA Job"
+                            ),
+                            detail=(
+                                "Job 已与当前 Shipment Run 绑定；"
+                                "下一节点只读取 Job 权威状态，不直接操作浏览器。"
+                            ),
+                            data={
+                                "job_id": job.job_id,
+                                "operation": job.operation.value,
+                                "environment": job.environment.value,
+                                "job_status": job.status.value,
+                            },
+                        )
+                    )
+                    await repository.flush()
+        except IntegrityError:
+            # 并发 Graph 重放可能同时尝试插入同一绑定。数据库唯一约束选出赢家后，
+            # 当前调用只需重读事实；RPA Job 本身也已由稳定幂等键去重。
+            return await self.get(run_id)
+        return await self.get(run_id)
+
+    async def coordinate_rpa_job(self, run_id: str) -> ShipmentAgentRunRead:
+        """把统一 RPA Job 状态投影为 Shipment V3 的下一步。
+
+        本方法从不点击网页，也不重试未知结果。``RESULT_UNKNOWN``、网站版本变化和登录
+        等人工问题统一进入 ``AWAITING_RPA_ATTENTION``；只有控制面完成对账或重排后，
+        Job 事务才会再次唤醒本运行。
+        """
+
+        current = await self._get_orm_snapshot(run_id)
+        if current.current_stage not in {
+            ShipmentAgentStage.AWAITING_RPA_RESULT,
+            ShipmentAgentStage.AWAITING_RPA_ATTENTION,
+        }:
+            return self._to_read(current)
+        if current.status not in {
+            ShipmentAgentRunStatus.RUNNING,
+            ShipmentAgentRunStatus.WAITING_EXTERNAL,
+            ShipmentAgentRunStatus.WAITING_RESOURCE,
+        }:
+            return self._to_read(current)
+
+        binding = self._latest_rpa_binding(
+            current,
+            RpaOperation.LINK_BOOKING_STAGE,
+            business_reference=current.selected_booking_application_number,
+        )
+        if binding is None:
+            if current.status is ShipmentAgentRunStatus.RUNNING:
+                return await self._set_running_stage(
+                    run_id,
+                    current.run_version,
+                    ShipmentAgentStage.DISPATCHING_RPA_JOB,
+                    "LINK_RPA_BINDING_MISSING",
+                    "LINK RPA 绑定需要恢复",
+                    "未找到当前申请对应的 Job 绑定，将按稳定幂等键重新派发并补齐绑定。",
+                )
+            return await self._set_rpa_dispatch_attention(
+                current,
+                error_code="LINK_RPA_BINDING_MISSING",
+                message="当前运行没有找到对应的 LINK RPA Job 绑定。",
+            )
+
+        job = binding.job
+        if job.status in {
+            RpaJobStatus.CREATED,
+            RpaJobStatus.QUEUED,
+            RpaJobStatus.RUNNING,
+            RpaJobStatus.RETRYABLE_FAILED,
+        }:
+            return await self._set_rpa_waiting(current, binding)
+
+        if job.status is RpaJobStatus.SUCCEEDED:
+            if job.business_outcome is not RpaBusinessOutcome.LINK_DRAFT_SAVED:
+                return await self._set_rpa_attention(
+                    current,
+                    binding,
+                    error_code="RPA_BUSINESS_OUTCOME_MISMATCH",
+                    message="RPA Job 已成功，但业务结果不是 LINK_DRAFT_SAVED。",
+                )
+            return await self._record_link_rpa_success(current, binding)
+
+        if job.status in {
+            RpaJobStatus.WAITING_HUMAN,
+            RpaJobStatus.RESULT_UNKNOWN,
+            RpaJobStatus.SITE_VERSION_UNKNOWN,
+        }:
+            return await self._set_rpa_attention(
+                current,
+                binding,
+                error_code=job.error_code or job.status.value,
+                message=job.error_message
+                or "RPA Job 需要操作员登录、核对外部结果或升级页面适配规则。",
+            )
+
+        if job.status in {RpaJobStatus.FAILED, RpaJobStatus.CANCELLED}:
+            return await self._mark_failed(
+                run_id,
+                current.run_version,
+                job.error_code or f"RPA_{job.status.value}",
+                job.error_message or f"LINK RPA Job 已进入 {job.status.value}。",
+            )
+
+        return await self._set_rpa_attention(
+            current,
+            binding,
+            error_code="UNSUPPORTED_RPA_STATUS",
+            message=f"暂不识别 RPA Job 状态 {job.status.value}，请人工核对。",
+        )
+
     async def coordinate_booking(
         self,
         run_id: str,
@@ -1770,6 +2115,195 @@ class ShipmentAgentService:
             title="Shipment Agent 已完成",
             detail="装载与/或订舱所需分支完成，案件已由人工批准结案。",
             data={},
+        )
+
+    async def _set_rpa_dispatch_attention(
+        self,
+        current: ShipmentAgentRun,
+        *,
+        error_code: str,
+        message: str,
+    ) -> ShipmentAgentRunRead:
+        """派发前合同/依赖异常：暂停给 RPA 操作员，不把问题伪装成订舱失败。"""
+
+        failure_message = message[:2_000]
+        allowed_actions = [
+            ShipmentAgentAction.RECHECK.value,
+            ShipmentAgentAction.STOP.value,
+        ]
+
+        def mutate(run: ShipmentAgentRun) -> bool:
+            changed = (
+                run.status is not ShipmentAgentRunStatus.WAITING_RESOURCE
+                or run.current_stage is not ShipmentAgentStage.AWAITING_RPA_ATTENTION
+                or run.pending_interrupt is not None
+                or run.allowed_actions != allowed_actions
+                or run.failure_code != error_code
+                or run.failure_message != failure_message
+            )
+            run.status = ShipmentAgentRunStatus.WAITING_RESOURCE
+            run.current_stage = ShipmentAgentStage.AWAITING_RPA_ATTENTION
+            run.pending_interrupt = None
+            run.allowed_actions = allowed_actions
+            run.failure_code = error_code
+            run.failure_message = failure_message
+            return changed
+
+        return await self._mutate(
+            current.id,
+            current.run_version,
+            mutate,
+            event_type="RPA_OPERATOR_ATTENTION_REQUIRED",
+            title="LINK 自动填单需要处理",
+            detail=failure_message,
+            data={"error_code": error_code},
+        )
+
+    async def _set_rpa_waiting(
+        self,
+        current: ShipmentAgentRun,
+        binding: ShipmentAgentRpaJobBinding,
+    ) -> ShipmentAgentRunRead:
+        """排队、执行或安全重试中：异步等待，不占住 HTTP 请求。"""
+
+        job = binding.job
+        allowed_actions = [
+            ShipmentAgentAction.RECHECK.value,
+            ShipmentAgentAction.STOP.value,
+        ]
+        failure_code = (
+            job.error_code if job.status is RpaJobStatus.RETRYABLE_FAILED else None
+        )
+        failure_message = (
+            job.error_message if job.status is RpaJobStatus.RETRYABLE_FAILED else None
+        )
+
+        def mutate(run: ShipmentAgentRun) -> bool:
+            changed = (
+                run.status is not ShipmentAgentRunStatus.WAITING_EXTERNAL
+                or run.current_stage is not ShipmentAgentStage.AWAITING_RPA_RESULT
+                or run.pending_interrupt is not None
+                or run.allowed_actions != allowed_actions
+                or run.failure_code != failure_code
+                or run.failure_message != failure_message
+            )
+            run.status = ShipmentAgentRunStatus.WAITING_EXTERNAL
+            run.current_stage = ShipmentAgentStage.AWAITING_RPA_RESULT
+            run.pending_interrupt = None
+            run.allowed_actions = allowed_actions
+            run.failure_code = failure_code
+            run.failure_message = failure_message
+            return changed
+
+        return await self._mutate(
+            current.id,
+            current.run_version,
+            mutate,
+            event_type="LINK_RPA_RESULT_PENDING",
+            title="等待 LINK RPA 执行结果",
+            detail=(
+                f"Job {job.id} 当前为 {job.status.value}；"
+                "系统将异步检查，业务人员无需重复创建订单。"
+            ),
+            data={
+                "job_id": job.id,
+                "job_status": job.status.value,
+                "current_step": job.current_step,
+            },
+        )
+
+    async def _set_rpa_attention(
+        self,
+        current: ShipmentAgentRun,
+        binding: ShipmentAgentRpaJobBinding,
+        *,
+        error_code: str,
+        message: str,
+    ) -> ShipmentAgentRunRead:
+        """未知结果、登录等待或页面漂移：停止自动循环，等待控制面对账。"""
+
+        job = binding.job
+        failure_message = message[:2_000]
+        allowed_actions = [
+            ShipmentAgentAction.RECHECK.value,
+            ShipmentAgentAction.STOP.value,
+        ]
+
+        def mutate(run: ShipmentAgentRun) -> bool:
+            changed = (
+                run.status is not ShipmentAgentRunStatus.WAITING_RESOURCE
+                or run.current_stage is not ShipmentAgentStage.AWAITING_RPA_ATTENTION
+                or run.pending_interrupt is not None
+                or run.allowed_actions != allowed_actions
+                or run.failure_code != error_code
+                or run.failure_message != failure_message
+            )
+            run.status = ShipmentAgentRunStatus.WAITING_RESOURCE
+            run.current_stage = ShipmentAgentStage.AWAITING_RPA_ATTENTION
+            run.pending_interrupt = None
+            run.allowed_actions = allowed_actions
+            run.failure_code = error_code
+            run.failure_message = failure_message
+            return changed
+
+        return await self._mutate(
+            current.id,
+            current.run_version,
+            mutate,
+            event_type="RPA_OPERATOR_ATTENTION_REQUIRED",
+            title="RPA Job 需要人工核对",
+            detail=(
+                f"{failure_message} 系统不会在外部结果不确定时再次点击保存。"
+            ),
+            data={
+                "job_id": job.id,
+                "job_status": job.status.value,
+                "current_step": job.current_step,
+                "error_code": error_code,
+            },
+        )
+
+    async def _record_link_rpa_success(
+        self,
+        current: ShipmentAgentRun,
+        binding: ShipmentAgentRpaJobBinding,
+    ) -> ShipmentAgentRunRead:
+        """草稿保存成功后回到原有 LINK 人工提交链，而不是直接完成订舱。"""
+
+        job = binding.job
+
+        def mutate(run: ShipmentAgentRun) -> bool:
+            changed = (
+                run.status is not ShipmentAgentRunStatus.RUNNING
+                or run.current_stage is not ShipmentAgentStage.AWAITING_BOOKING_RESULT
+                or run.pending_interrupt is not None
+                or run.allowed_actions != []
+                or run.failure_code is not None
+                or run.failure_message is not None
+            )
+            run.status = ShipmentAgentRunStatus.RUNNING
+            run.current_stage = ShipmentAgentStage.AWAITING_BOOKING_RESULT
+            run.pending_interrupt = None
+            run.allowed_actions = []
+            run.failure_code = None
+            run.failure_message = None
+            return changed
+
+        return await self._mutate(
+            current.id,
+            current.run_version,
+            mutate,
+            event_type="LINK_RPA_DRAFT_SAVED",
+            title="LINK 七步草稿已自动保存",
+            detail=(
+                "RPA 只完成了草稿填写与保存；接下来仍由原有流程要求人工批准提交，"
+                "并等待承运人异步确认。"
+            ),
+            data={
+                "job_id": job.id,
+                "business_outcome": RpaBusinessOutcome.LINK_DRAFT_SAVED.value,
+                "external_reference": job.external_reference,
+            },
         )
 
     async def _set_booking_pending(
@@ -2465,6 +2999,35 @@ class ShipmentAgentService:
         return None
 
     @staticmethod
+    def _latest_rpa_binding(
+        run: ShipmentAgentRun,
+        operation: RpaOperation,
+        *,
+        business_reference: str | None = None,
+    ) -> ShipmentAgentRpaJobBinding | None:
+        """返回当前业务资源对应的最后一条绑定。
+
+        一次运行可能先绑定旧 LINK 申请，随后因拒绝而选择替代申请，所以不能简单取第一
+        条 LINK Job。``business_reference`` 与当前 application number 对齐后，再按
+        ``sequence`` 取最新项。
+        """
+
+        candidates = [
+            binding
+            for binding in run.rpa_job_bindings
+            if (
+                binding.operation is operation
+                and (
+                    business_reference is None
+                    or binding.job.business_reference == business_reference
+                )
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda value: value.sequence)
+
+    @staticmethod
     def _copy_link_snapshot(
         run: ShipmentAgentRun,
         snapshot,
@@ -2618,6 +3181,26 @@ class ShipmentAgentService:
             pending_interrupt=pending,
             allowed_actions=[ShipmentAgentAction(value) for value in run.allowed_actions],
             child_agent=child,
+            rpa_jobs=[
+                ShipmentAgentRpaJobRead(
+                    job_id=binding.job.id,
+                    sequence=binding.sequence,
+                    domain=binding.job.domain,
+                    operation=binding.operation,
+                    environment=binding.job.environment,
+                    status=binding.job.status,
+                    current_step=binding.job.current_step,
+                    side_effect_phase=binding.job.effect_phase,
+                    business_outcome=binding.job.business_outcome,
+                    external_reference=binding.job.external_reference,
+                    error_code=binding.job.error_code,
+                    updated_at=binding.job.updated_at,
+                )
+                for binding in sorted(
+                    run.rpa_job_bindings,
+                    key=lambda value: value.sequence,
+                )
+            ],
             next_wake_at=run.next_wake_at,
             wake_reason=run.wake_reason,
             failure_code=run.failure_code,

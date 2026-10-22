@@ -487,6 +487,7 @@ public class ShipmentAgentRunService {
             @JsonProperty("allowed_actions")
             List<ShipmentAgentAction> allowedActions,
             @JsonProperty("child_agent") RemoteChildAgent childAgent,
+            @JsonProperty("rpa_jobs") List<RemoteRpaJob> rpaJobs,
             @JsonProperty("created_at") String createdAt,
             @JsonProperty("updated_at") String updatedAt,
             @JsonProperty("completed_at") String completedAt,
@@ -543,6 +544,18 @@ public class ShipmentAgentRunService {
                     childAgent == null
                             ? null
                             : childAgent.toPlatformResponse(),
+                    rpaJobs == null
+                            ? List.of()
+                            : rpaJobs.stream()
+                                    .map(job -> {
+                                        if (job == null) {
+                                            throw badGateway(
+                                                    "Python Agent Runtime 返回了"
+                                                            + "空的 RPA Job 摘要。");
+                                        }
+                                        return job.toPlatformResponse();
+                                    })
+                                    .toList(),
                     createdAt,
                     updatedAt,
                     completedAt,
@@ -759,6 +772,57 @@ public class ShipmentAgentRunService {
                     currentStep,
                     runVersion,
                     nextAction);
+        }
+    }
+
+    /**
+     * Python 返回的 RPA Job 安全投影。
+     *
+     * <p>故意不声明 business_payload、attempt_token、idempotency_key、claimed_by 等
+     * 控制面字段。即使 Python 的内部 Job 模型继续扩展，Jackson 也只读取这里显式列出的
+     * 页面安全字段。</p>
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record RemoteRpaJob(
+            @JsonProperty("job_id") String jobId,
+            int sequence,
+            String domain,
+            String operation,
+            String environment,
+            String status,
+            @JsonProperty("current_step") String currentStep,
+            @JsonProperty("side_effect_phase") String sideEffectPhase,
+            @JsonProperty("business_outcome") String businessOutcome,
+            @JsonProperty("external_reference") String externalReference,
+            @JsonProperty("error_code") String errorCode,
+            @JsonProperty("updated_at") String updatedAt) {
+
+        private ShipmentAgentRpaJobResponse toPlatformResponse() {
+            if (jobId == null
+                    || sequence <= 0
+                    || domain == null
+                    || operation == null
+                    || environment == null
+                    || status == null
+                    || currentStep == null
+                    || sideEffectPhase == null
+                    || updatedAt == null) {
+                throw badGateway(
+                        "Python Agent Runtime 返回的 RPA Job 摘要缺少必填字段。");
+            }
+            return new ShipmentAgentRpaJobResponse(
+                    jobId,
+                    sequence,
+                    domain,
+                    operation,
+                    environment,
+                    status,
+                    currentStep,
+                    sideEffectPhase,
+                    businessOutcome,
+                    externalReference,
+                    errorCode,
+                    updatedAt);
         }
     }
 

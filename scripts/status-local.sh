@@ -14,6 +14,7 @@ printf 'Local learning environment\n'
 printf '%-24s %-8s %s\n' "SERVICE" "STATE" "DETAIL"
 print_process_status "link-booking-service" 'uvicorn.*app\.main:app' 8000
 print_process_status "load-planning-service" 'uvicorn.*app\.main:app' 8200
+print_background_process_status "link-rpa-worker" 'app\.rpa\.browser_worker.*--domain LINK'
 print_process_status "platform-bff" 'maven|spring-boot:run|platform-bff' 8080
 print_process_status "platform-web" 'node.*vite' 5173
 print_process_status "link-carrier-simulator" 'uvicorn.*app\.main:app' 8100

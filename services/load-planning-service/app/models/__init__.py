@@ -3,6 +3,11 @@
 from app.models.agent_run import AgentRun, AgentRunEvent, PackingPlan
 from app.models.load_planning import CargoItem, LoadPlanningTask, PalletSpec
 from app.models.plan_version import LoadPlanVersion, LoadPlanVersionEvent
+from app.models.rpa_job import (
+    RpaJobCallbackReceipt,
+    RpaJobEvent,
+    RpaJobRecord,
+)
 from app.models.shipment_agent_run import (
     ShipmentAgentAction,
     ShipmentAgentCapability,
@@ -15,6 +20,7 @@ from app.models.shipment_agent_run import (
     ShipmentAgentNotificationSeverity,
     ShipmentAgentNotificationStatus,
     ShipmentAgentNotificationType,
+    ShipmentAgentRpaJobBinding,
     ShipmentAgentRun,
     ShipmentAgentRunStatus,
     ShipmentAgentStage,
@@ -48,6 +54,9 @@ __all__ = [
     "LoadPlanningTask",
     "PackingPlan",
     "PalletSpec",
+    "RpaJobCallbackReceipt",
+    "RpaJobEvent",
+    "RpaJobRecord",
     "ShipmentAgentAction",
     "ShipmentAgentCapability",
     "ShipmentAgentCommand",
@@ -59,6 +68,7 @@ __all__ = [
     "ShipmentAgentNotificationSeverity",
     "ShipmentAgentNotificationStatus",
     "ShipmentAgentNotificationType",
+    "ShipmentAgentRpaJobBinding",
     "ShipmentAgentRun",
     "ShipmentAgentRunStatus",
     "ShipmentAgentStage",

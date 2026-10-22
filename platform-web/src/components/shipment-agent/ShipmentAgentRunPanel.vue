@@ -53,8 +53,8 @@ const pendingResumeKeys = new Map<string, string>()
 const statusLabels: Record<ShipmentAgentRunStatus, string> = {
   RUNNING: '系统正在处理',
   WAITING_HUMAN: '等待业务处理',
-  WAITING_RESOURCE: '等待专业作业',
-  WAITING_EXTERNAL: '等待承运人回复',
+  WAITING_RESOURCE: '等待专业作业或自动填单',
+  WAITING_EXTERNAL: '等待外部系统回复',
   COMPLETED: '流程已完成',
   FAILED: '处理失败',
   CANCELLED: '本次处理已停止',
@@ -123,6 +123,21 @@ const stageCopy: Record<
     eyebrow: '装载异常待处理',
     title: '装载方案需要重新规划',
     description: '上一轮已驳回或失败；处理完成后系统会重新读取最新状态。',
+  },
+  DISPATCHING_RPA_JOB: {
+    eyebrow: '自动编排',
+    title: '正在派发自动填单任务',
+    description: '系统使用稳定业务身份创建或复用统一 RPA Job，不会因网络重试重复生成外部草稿。',
+  },
+  AWAITING_RPA_RESULT: {
+    eyebrow: '自动填单',
+    title: '机器人正在填写 LINK 草稿',
+    description: '浏览器机器人在独立 Worker 中执行；总流程不会占用请求线程，也不会重复点击外部保存。',
+  },
+  AWAITING_RPA_ATTENTION: {
+    eyebrow: '需要关注',
+    title: '自动填单需要人工核对',
+    description: '外部结果不明确、页面版本变化或登录状态异常时，系统会暂停写操作并保留现场证据。',
   },
   AWAITING_BOOKING_SUBMIT_APPROVAL: {
     eyebrow: '等待提交批准',
@@ -212,6 +227,9 @@ const businessStageIndex: Record<ShipmentAgentStage, number> = {
   AWAITING_LOAD_REVIEW: 1,
   AWAITING_LOAD_RELEASE: 1,
   AWAITING_LOAD_REPLAN: 1,
+  DISPATCHING_RPA_JOB: 2,
+  AWAITING_RPA_RESULT: 2,
+  AWAITING_RPA_ATTENTION: 2,
   AWAITING_BOOKING_SUBMIT_APPROVAL: 2,
   SUBMITTING_BOOKING: 2,
   AWAITING_BOOKING_RESULT: 3,
@@ -263,6 +281,9 @@ const stageOwnerLabels: Record<ShipmentAgentStage, string> = {
   AWAITING_LOAD_REVIEW: '装载审核员',
   AWAITING_LOAD_RELEASE: '仓库作业负责人',
   AWAITING_LOAD_REPLAN: '装载规划员',
+  DISPATCHING_RPA_JOB: '系统自动处理',
+  AWAITING_RPA_RESULT: 'RPA Worker / 系统自动跟踪',
+  AWAITING_RPA_ATTENTION: 'RPA 运维或订舱业务员',
   AWAITING_BOOKING_SUBMIT_APPROVAL: '订舱业务员',
   SUBMITTING_BOOKING: '系统自动处理',
   AWAITING_BOOKING_RESULT: '承运人 / 系统自动跟踪',
@@ -288,6 +309,9 @@ const stageNextActionLabels: Record<ShipmentAgentStage, string> = {
   AWAITING_LOAD_REVIEW: '打开 3D 装载方案并完成复核',
   AWAITING_LOAD_RELEASE: '发布现场可以执行的正式装载版本',
   AWAITING_LOAD_REPLAN: '修正装载问题并重新规划',
+  DISPATCHING_RPA_JOB: '等待系统完成幂等派发，无需重复发起',
+  AWAITING_RPA_RESULT: '等待机器人保存 LINK 草稿；不要手工重复执行同一票',
+  AWAITING_RPA_ATTENTION: '按 RPA 作业提示核对外部结果，处理后重新检查',
   AWAITING_BOOKING_SUBMIT_APPROVAL: '核对七步填单结果并批准提交',
   SUBMITTING_BOOKING: '等待系统完成一次安全提交',
   AWAITING_BOOKING_RESULT: '等待承运人回复；不要重复提交申请',
@@ -428,6 +452,8 @@ const automaticallyRoutableStages = new Set<ShipmentAgentStage>([
   'SYNCING_CASE',
   'ASSESSING_DATA_READINESS',
   'STARTING_LOAD_AGENT',
+  'DISPATCHING_RPA_JOB',
+  'AWAITING_RPA_RESULT',
   'AWAITING_BOOKING_RESULT',
   'AWAITING_CASE_ACTIVATION',
   'SUBMITTING_BOOKING',
@@ -483,6 +509,25 @@ const showsAutoTrackingCard = computed(
         run.value?.status ?? '',
       )),
 )
+
+function automaticTrackingTitle(current: ShipmentAgentRun): string {
+  if (isAutomaticRecoveryState.value) {
+    return '系统正在自动恢复本票流程'
+  }
+  if (
+    current.currentStage === 'DISPATCHING_RPA_JOB' ||
+    current.currentStage === 'AWAITING_RPA_RESULT'
+  ) {
+    return '系统正在自动跟踪 RPA 填单进度'
+  }
+  if (current.currentStage === 'AWAITING_RPA_ATTENTION') {
+    return '自动填单已安全暂停，等待问题处理'
+  }
+  if (current.status === 'WAITING_EXTERNAL') {
+    return '系统正在自动跟踪承运人回复'
+  }
+  return '系统正在自动跟踪专业作业进度'
+}
 
 const lastRun = computed(() => history.value[0] ?? null)
 
@@ -645,6 +690,8 @@ function wakeReasonLabel(value: string | null): string {
   const labels: Record<string, string> = {
     RECOVER_RUNNING_STEP: '恢复尚未完成的自动步骤',
     POLL_LINK_STATUS: '跟踪 LINK 与承运人结果',
+    POLL_RPA_JOB_STATUS: '跟踪浏览器自动填单进度',
+    RPA_JOB_STATE_CHANGED: 'RPA Job 状态变化后立即核对',
     POLL_LOAD_STATUS: '跟踪智能装载进度',
     POLL_RESOURCE_BINDING: '检查专业作业是否已经绑定',
     RETRY_AFTER_AUTO_WAKE_FAILURE: '等待退避时间后自动重试',
@@ -857,15 +904,7 @@ onBeforeUnmount(() => {
         >
           <span><UiIcon :name="run.status === 'WAITING_EXTERNAL' ? 'clock' : 'layers'" /></span>
           <div>
-            <strong>
-              {{
-                isAutomaticRecoveryState
-                  ? '系统正在自动恢复本票流程'
-                  : run.status === 'WAITING_EXTERNAL'
-                  ? '系统正在自动跟踪承运人回复'
-                  : '系统正在自动跟踪专业作业进度'
-              }}
-            </strong>
+            <strong>{{ automaticTrackingTitle(run) }}</strong>
             <p>
               {{
                 run.nextWakeAt

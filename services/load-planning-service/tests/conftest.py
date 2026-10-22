@@ -22,6 +22,9 @@ os.environ["LOAD_PLANNING_NACOS_DISCOVERY_ENABLED"] = "false"
 # API 测试的目标包含“真实 REST 写入口经过 LangGraph”。显式开启可避免开发者本机
 # ``.env.local`` 恰好关闭功能开关时，整组接口测试悄悄退回 legacy Service 路径仍然通过。
 os.environ["LOAD_PLANNING_LANGGRAPH_ENABLED"] = "true"
+# 既有 Shipment 测试锁定 V2 行为；V3 专项测试会在构造 Service 时显式开启 RPA，
+# 这样可以同时证明历史流程不回归、新流程确实经过统一 RPA Job。
+os.environ["SHIPMENT_AGENT_RPA_ENABLED"] = "false"
 
 from app.db.base import Base
 from app.db.session import get_session, get_session_factory

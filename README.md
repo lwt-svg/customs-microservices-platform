@@ -25,7 +25,8 @@ customs-microservices-platform/
 │   ├── link-booking-service/    Python FastAPI LINK 服务
 │   ├── load-planning-service/   Python FastAPI 智能装载任务与算法服务
 │   └── link-carrier-simulator/  Python FastAPI 模拟承运人服务
-├── scripts/                     core/full 一键启动、状态与停止脚本
+├── scripts/                     macOS/Linux 与 Windows 一键启停脚本
+├── requirements-local.txt       一次安装三个 Python 服务与学习工具
 ├── compose.yaml                 本地 MySQL、Nacos 与可选模拟承运人定义
 └── .env.example                 安全的本地配置示例
 ```
@@ -52,6 +53,9 @@ Vue 企业工作台
 - Shipment Case 案件中心、资源绑定、事件时间线、并发控制和幂等命令台账；
 - Shipment Operations Agent 总 LangGraph：缺资料暂停、跨工具恢复、人工审批和完整 Trace；
 - V3 自动唤醒：数据库租约协调单实例领取、暂时故障指数退避和可自动恢复的站内业务通知；
+- 统一 RPA Job 控制面：LINK、产地证和商检共享幂等、租约、心跳、结果回报与证据模型；
+- Playwright 真实浏览器 Worker：自动填写本地 LINK 七步 Sandbox，并支持 Windows
+  单一窗口 UKey 人机协同边界；
 - Vue → Java BFF → Nacos → Python → MySQL 的真实本机调用链；
 - 一键启动、日志轮转、自动测试和端到端验收脚本。
 
@@ -234,6 +238,170 @@ LINK：DRAFT → SUBMITTED ───────────────→ CONF
 请求投递使用稳定的 `Idempotency-Key`；回调使用 `callback_id + payload_hash` 幂等，
 并通过本地 `X-Carrier-Callback-Token` 鉴权。所有编号仍为 `DEMO-` 构造值。
 
+## 首次安装
+
+项目不依赖固定的 `/Users/...` 或 `C:\...` 路径，可以克隆到任意目录。`127.0.0.1`
+在 macOS、Linux 和 Windows 上都表示当前电脑，不是某一台 Mac 的地址。
+
+共同依赖：
+
+- Git；
+- Docker Desktop（Windows 建议启用 WSL 2 backend）或 Docker Engine；
+- Python 3.12；推荐使用 Conda 环境 `customs-affairs-os-lab`；
+- JDK 21 与 Maven；
+- Node.js 20 或更高版本。
+
+MySQL 8.4 和 Nacos 2.5.3 不需要在宿主机分别安装，启动脚本会通过 `compose.yaml`
+拉取并启动本地容器。Python、Java、Vue 业务应用默认仍作为宿主机进程运行，方便断点调试。
+
+### Windows：Conda + Docker Desktop
+
+第一次克隆后，在仓库根目录打开 PowerShell：
+
+```powershell
+conda create -n customs-affairs-os-lab python=3.12 -y
+conda activate customs-affairs-os-lab
+
+# 如果 Windows 执行策略阻止当前脚本，只为当前 PowerShell 进程临时放行。
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\windows\setup-local.ps1
+```
+
+`setup-local.ps1` 会：
+
+1. 检查当前 Conda Python 是否为 3.12；
+2. 保留已有 `.env.local`，不存在时才从 `.env.example` 创建；
+3. 通过 `requirements-local.txt` 一次安装三个 Python 服务、测试工具和 Playwright；
+4. 安装 Playwright Chromium；
+5. 对两个 Vue 项目执行 `npm ci`；
+6. 预下载 Maven 依赖；
+7. 拉取 MySQL 与 Nacos Docker 镜像。
+
+它不会写入企业账号、不会覆盖本机配置，也不会启动真实 LINK 或单一窗口网站。
+
+日常启动：
+
+```powershell
+conda activate customs-affairs-os-lab
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\windows\run-local.ps1 core
+```
+
+状态和停止：
+
+```powershell
+.\scripts\windows\status-local.ps1
+.\scripts\windows\stop-local.ps1
+```
+
+需要第 22 章可选模拟承运人时：
+
+```powershell
+.\scripts\windows\run-local.ps1 full
+```
+
+Windows 脚本会自动：
+
+- 启动或复用 Docker MySQL、Nacos；
+- 创建四个本地 schema；
+- 执行三个 Python 服务各自的 Alembic 迁移；
+- 由 Java Flyway 在 BFF 启动时升级平台库；
+- 启动 Python、Java、Vue 并等待健康检查成功；
+- 把 PID 和日志写入 Git 忽略的 `runtime\`。
+
+> `.env.local`、数据库 volume、上传文件和 `runtime\` 都不会从 Git 下载。换一台电脑首次
+> 启动会得到一套新的本地学习环境，这是有意的安全隔离。
+
+LINK Sandbox Worker 会随 `core/full` 自动启动。单一窗口 Worker 不自动启动，因为真实
+单一窗口依赖 Windows 交互式桌面、UKey 和人工登录确认。当前学习版只连接本地 Sandbox：
+
+```powershell
+# 模拟 UKey 已就绪，领取一票 COO 或 CIQ 任务后退出。
+.\scripts\windows\run-single-window-worker.ps1 -SandboxUKeyPresent -Once
+
+# 不带 -Once 时持续轮询；默认显示浏览器，便于人工看清每一步。
+.\scripts\windows\run-single-window-worker.ps1 -SandboxUKeyPresent
+```
+
+这条命令不会读取真实卡口令，也不会访问真实单一窗口。未来接入正式授权环境时，应新增
+独立 Adapter 和版本化 SelectorPack，账号、Cookie、证书与 UKey 口令仍只留在受控申报机。
+
+### macOS / Linux
+
+先创建并激活 Python 3.12 环境，然后一次安装全部 Python 依赖：
+
+```bash
+conda create -n customs-affairs-os-lab python=3.12 -y
+conda activate customs-affairs-os-lab
+python -m pip install -r requirements-local.txt
+python -m playwright install chromium
+npm --prefix platform-web ci
+npm --prefix carrier-simulator-web ci
+```
+
+日常启动继续使用下面的 Bash 一键脚本。
+
+## 统一 RPA Sandbox 与真实浏览器闭环
+
+`load-planning-service` 的 8200 端口同时提供两个本地练习页面，不增加新的 Web 服务：
+
+- LINK 七步模拟站：`http://127.0.0.1:8200/api/v1/rpa-sandbox/sites/link`
+- 单一窗口模拟站：`http://127.0.0.1:8200/api/v1/rpa-sandbox/sites/single-window`
+
+它们不是对真实网站的复制，不包含企业 URL、账号、Cookie、原始 XPath 或 UKey 口令。
+页面只保留“登录/卡就绪、字段填写、保存草稿或暂存”的业务动作形状，而且没有正式提交、
+签章或申报按钮。Sandbox 草稿保存在 8200 进程内存中，服务重启后会清空；可靠任务状态、
+attempt token、租约、事件和回调收据保存在 `load_planning_service` MySQL schema。
+
+`core/full` 默认自动启动 LINK Worker。需要单独观察浏览器时，可以先在 `.env.local`
+设置 `RPA_SANDBOX_AUTO_LINK_WORKER_ENABLED=false`，重新启动 core，再手工执行：
+
+```bash
+cd services/load-planning-service
+python -m app.rpa.browser_worker --domain LINK --headed --once
+```
+
+macOS/Linux 可以用 Sandbox 验证单一窗口流程，但这不等于具备真实 UKey 能力：
+
+```bash
+cd services/load-planning-service
+python -m app.rpa.browser_worker \
+  --domain SINGLE_WINDOW \
+  --ukey-present \
+  --headed \
+  --once
+```
+
+服务启动且 Chromium 已安装后，执行三条真实浏览器 E2E：
+
+```bash
+python scripts/rpa-sandbox-e2e.py
+```
+
+如果 Playwright Chromium 因网络暂时无法下载，也可以显式使用本机已安装的浏览器渠道：
+
+```bash
+# macOS / Windows 已安装 Google Chrome
+python scripts/rpa-sandbox-e2e.py --browser-channel chrome
+
+# Windows 已安装 Microsoft Edge
+python scripts/rpa-sandbox-e2e.py --browser-channel msedge
+```
+
+脚本只允许访问 `127.0.0.1/localhost`，使用 `SYNTHETIC_DEMO` 构造数据，经统一 RPA Job API
+依次验证 LINK、COO 和 CIQ；它不会绕过控制面直接保存草稿。截图证据进入 Git 忽略的
+`runtime/rpa-evidence/`。
+
+关键失败状态：
+
+- `WAITING_HUMAN`：缺少 UKey、登录态或必须由业务人员完成的动作；
+- `RETRYABLE_FAILED`：外部写入前的临时浏览器或网络故障，可以安全重试；
+- `SITE_VERSION_UNKNOWN`：页面指纹或 SelectorPack 不匹配，必须先适配新页面；
+- `RESULT_UNKNOWN`：已经开始保存但结果无法确认，禁止盲目再点，必须人工对账；
+- `FAILED / BUSINESS_PAYLOAD_INVALID`：缺少确定性必填字段，先修复源数据再重新派发。
+
+Worker 永远只执行草稿保存/暂存。正式提交、申报和签章必须保留人工确认与企业授权边界。
+
 ## 本地启动
 
 首次准备本机配置：
@@ -248,6 +416,12 @@ cp -n .env.example .env.local
 
 ```bash
 ./scripts/run-local.sh core
+```
+
+Windows 对应命令：
+
+```powershell
+.\scripts\windows\run-local.ps1 core
 ```
 
 第 23.9 章需要试验候选方案智能解读时，先从不联网、无费用的规则模式开始：
@@ -314,6 +488,13 @@ MySQL、Nacos、LINK 8000、智能装载 8200、Java 8080、平台 5173
 ./scripts/stop-local.sh
 python3 scripts/load-planning-e2e.py
 ./scripts/check-local-scripts.sh
+```
+
+Windows 对应命令：
+
+```powershell
+.\scripts\windows\status-local.ps1
+.\scripts\windows\stop-local.ps1
 ```
 
 脚本把日志和 PID 放进 Git 忽略的 `runtime/`；停止时只处理脚本自己登记的应用进程，不会

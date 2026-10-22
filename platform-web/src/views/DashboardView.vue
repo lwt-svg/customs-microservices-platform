@@ -93,6 +93,9 @@ const stageLabels: Record<ShipmentAgentStage, string> = {
   AWAITING_LOAD_REVIEW: '复核装载方案',
   AWAITING_LOAD_RELEASE: '发布正式装载方案',
   AWAITING_LOAD_REPLAN: '调整装载方案',
+  DISPATCHING_RPA_JOB: '派发自动填单任务',
+  AWAITING_RPA_RESULT: '等待自动填单结果',
+  AWAITING_RPA_ATTENTION: '核对自动填单异常',
   AWAITING_BOOKING_SUBMIT_APPROVAL: '确认提交订舱',
   SUBMITTING_BOOKING: '提交订舱申请',
   AWAITING_BOOKING_RESULT: '等待承运人回复',
@@ -232,7 +235,7 @@ const workItems = computed<WorkItem[]>(() => {
         id: `shipment-resource-${run.runId}`,
         eyebrow: `专业作业 · ${stageLabel(run.currentStage)}`,
         title: run.caseName || run.caseNumber,
-        detail: `${run.caseNumber} 正在等待装载或订舱工作完成，进入案件即可查看具体要求。`,
+        detail: `${run.caseNumber} 正在等待装载、自动填单或订舱工作完成，进入案件即可查看具体要求。`,
         action: '继续办理',
         route: shipmentCasePath(run.caseNumber),
         updatedAt: run.updatedAt,
@@ -399,7 +402,10 @@ const progressItems = computed<ProgressItem[]>(() => {
     items.push({
       id: `external-${run.runId}`,
       title: run.caseName || run.caseNumber,
-      detail: '订舱申请已发出，正在等待承运人回复，请勿重复提交。',
+      detail:
+        run.currentStage === 'AWAITING_RPA_RESULT'
+          ? 'LINK 自动填单已派发，正在等待机器人保存草稿，请勿手工重复执行同一票。'
+          : '订舱申请已发出，正在等待承运人回复，请勿重复提交。',
       route: shipmentCasePath(run.caseNumber),
       updatedAt: run.updatedAt,
       kind: 'external',
@@ -579,7 +585,7 @@ function caseProgressLabel(shipmentCase: ShipmentCase): string {
   const run = latestRunByCase.value.get(shipmentCase.caseNumber)
   if (run?.status === 'WAITING_HUMAN') return '等待业务处理'
   if (run?.status === 'WAITING_RESOURCE') return stageLabel(run.currentStage)
-  if (run?.status === 'WAITING_EXTERNAL') return '等待外部回复'
+  if (run?.status === 'WAITING_EXTERNAL') return '等待外部系统回复'
   if (run?.status === 'RUNNING') return stageLabel(run.currentStage)
   if (run?.status === 'FAILED') return '流程异常'
   if (shipmentCase.resourceBindings.length === 0) return '待确认后续流程'

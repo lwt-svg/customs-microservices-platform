@@ -33,6 +33,11 @@ dev = [
     "reportlab>=4.2,<5.0",
     "ruff>=0.8,<1.0",
 ]
+rpa = [
+    # RPA Worker 与浏览器内核分开安装。依赖包由 pip 安装，Chromium 由
+    # ``python -m playwright install chromium`` 安装，便于 Windows 申报机单独维护。
+    "playwright>=1.55,<2.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

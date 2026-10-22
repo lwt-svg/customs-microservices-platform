@@ -77,6 +77,10 @@ def get_shipment_agent_service(
         session_factory,
         link_gateway,
         checkpointer,
+        rpa_enabled=settings.shipment_agent_rpa_enabled,
+        rpa_environment=settings.shipment_agent_rpa_environment,
+        rpa_adapter_key=settings.shipment_agent_rpa_adapter_key,
+        rpa_selector_pack_version=(settings.shipment_agent_rpa_selector_pack_version),
     )
 
 

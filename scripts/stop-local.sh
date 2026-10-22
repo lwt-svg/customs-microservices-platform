@@ -61,6 +61,7 @@ stop_managed_process "carrier-simulator-web" 'node.*vite'
 stop_managed_process "link-carrier-simulator" 'uvicorn.*app\.main:app'
 stop_managed_process "platform-web" 'node.*vite'
 stop_managed_process "platform-bff" 'maven|spring-boot:run|platform-bff'
+stop_managed_process "link-rpa-worker" 'app\.rpa\.browser_worker.*--domain LINK'
 stop_managed_process "load-planning-service" 'uvicorn.*app\.main:app'
 stop_managed_process "link-booking-service" 'uvicorn.*app\.main:app'
 

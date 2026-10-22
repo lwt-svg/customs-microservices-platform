@@ -8,11 +8,16 @@ LINK 的原始响应、URL 或异常正文写入 Agent Trace；上游协议先�
 要求重新读取事实。
 """
 
+import json
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import date
+from typing import Literal, Protocol
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+LINK_RPA_DRAFT_PAYLOAD_VERSION = "LINK_RPA_DRAFT_V1"
 
 
 class LinkBookingClientError(Exception):
@@ -39,6 +44,100 @@ class LinkCommandConflictError(LinkBookingClientError):
     """远端当前状态不允许执行写命令。"""
 
 
+class _StrictLinkRpaPayloadModel(BaseModel):
+    """LINK RPA 读取合同的共同安全配置。
+
+    ``extra='forbid'`` 会拒绝双方尚未约定的嵌套字段；``strict=True`` 会阻止
+    ``"12"`` 被静默转换成数字 12。RPA 会在外部网页产生副作用，因此宁可因协议变化
+    暂停，也不能把形状不确定的数据交给浏览器脚本猜测。
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        str_strip_whitespace=True,
+        allow_inf_nan=False,
+    )
+
+
+class LinkRpaBookingItem(_StrictLinkRpaPayloadModel):
+    """Packing List 中一条经 LINK 人工确认的商品明细。"""
+
+    item_code: str = Field(min_length=1, max_length=64)
+    lot_number: str | None = Field(default=None, max_length=64)
+    po_number: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=500)
+    quantity: int = Field(ge=0)
+    cartons: int = Field(ge=0)
+    net_weight_kg: float = Field(ge=0)
+    gross_weight_kg: float = Field(ge=0)
+
+
+class LinkRpaPoAllocation(_StrictLinkRpaPayloadModel):
+    """一个包组分配给某张 PO 的数量。"""
+
+    po_number: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=0)
+
+
+class LinkRpaPackage(_StrictLinkRpaPayloadModel):
+    """Packing List 中由小计行收口的一个包组。"""
+
+    description: str = Field(min_length=1, max_length=500)
+    pallets: int = Field(ge=0)
+    cartons: int = Field(ge=0)
+    quantity: int = Field(ge=0)
+    net_weight_kg: float = Field(ge=0)
+    gross_weight_kg: float = Field(ge=0)
+    cbm: float | None = Field(default=None, ge=0)
+    po_allocations: tuple[LinkRpaPoAllocation, ...] = ()
+
+
+class LinkRpaBookingDetails(_StrictLinkRpaPayloadModel):
+    """RPA 填写 LINK 七步草稿时可以使用的结构化 Packing List 数据。"""
+
+    invoice_number: str | None = Field(default=None, max_length=64)
+    document_date: date | None = None
+    ciq_number: str | None = Field(default=None, max_length=64)
+    shipper: str | None = Field(default=None, max_length=1000)
+    consignee: str | None = Field(default=None, max_length=1000)
+    notify_party: str | None = Field(default=None, max_length=1000)
+    marks: str | None = Field(default=None, max_length=1000)
+    total_pallets: int | None = Field(default=None, ge=0)
+    total_cartons: int | None = Field(default=None, ge=0)
+    total_quantity: int | None = Field(default=None, ge=0)
+    total_cbm: float | None = Field(default=None, ge=0)
+    total_net_weight_kg: float | None = Field(default=None, ge=0)
+    total_gross_weight_kg: float | None = Field(default=None, ge=0)
+    items: tuple[LinkRpaBookingItem, ...] = ()
+    packages: tuple[LinkRpaPackage, ...] = ()
+    checks: tuple[str, ...] = ()
+
+
+class LinkRpaDraftPayload(_StrictLinkRpaPayloadModel):
+    """LINK 详情转换出的、可安全交给 RPA Worker 的 v1 草稿合同。
+
+    当前 LINK 服务只接受 ``DEMO-`` 编号，因此这里必须显式标记为
+    ``SYNTHETIC_DEMO``。这个固定标签会继续经过 RPA Job 的环境校验，防止演示数据被
+    误派发到 Production。
+    """
+
+    payload_schema_version: Literal["LINK_RPA_DRAFT_V1"] = LINK_RPA_DRAFT_PAYLOAD_VERSION
+    data_source_label: Literal["SYNTHETIC_DEMO"] = "SYNTHETIC_DEMO"
+    application_number: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^DEMO-[A-Za-z0-9_-]+$",
+    )
+    origin_port: str = Field(min_length=1, max_length=64)
+    destination_port: str = Field(min_length=1, max_length=64)
+    transport_mode: str = Field(min_length=1, max_length=32)
+    container_type: str = Field(min_length=1, max_length=32)
+    requested_etd: date | None
+    booking_details: LinkRpaBookingDetails | None
+
+
 @dataclass(frozen=True, slots=True)
 class LinkBookingSnapshot:
     """总 Agent 决策需要的最小 LINK 快照。"""
@@ -49,6 +148,8 @@ class LinkBookingSnapshot:
     carrier_status: str | None
     carrier_can_retry: bool
     carrier_request_id: str | None
+    # 默认值保证现有测试 Fake 和旧调用方无需立刻知道 RPA 新合同。
+    rpa_payload: LinkRpaDraftPayload | None = None
 
 
 class LinkBookingGateway(Protocol):
@@ -84,9 +185,7 @@ class HttpLinkBookingClient:
         encoded = quote(application_number, safe="")
         try:
             async with self._client() as client:
-                response = await client.get(
-                    f"/api/v1/booking-applications/{encoded}/detail"
-                )
+                response = await client.get(f"/api/v1/booking-applications/{encoded}/detail")
         except (httpx.TimeoutException, httpx.TransportError) as error:
             raise LinkBookingUnavailableError("LINK 订舱服务暂时不可用") from error
 
@@ -134,18 +233,14 @@ class HttpLinkBookingClient:
                     f"/api/v1/booking-applications/{encoded}/carrier-submission/retry"
                 )
         except (httpx.TimeoutException, httpx.TransportError) as error:
-            raise LinkCommandResultUnknownError(
-                "LINK 承运人重试结果未知，需要重新检查"
-            ) from error
+            raise LinkCommandResultUnknownError("LINK 承运人重试结果未知，需要重新检查") from error
 
         if response.status_code == httpx.codes.NOT_FOUND:
             raise LinkBookingNotFoundError("LINK 承运人提交任务不存在")
         if response.status_code == httpx.codes.CONFLICT:
             raise LinkCommandConflictError("LINK 承运人提交任务当前不能重试")
         if response.status_code >= 500:
-            raise LinkCommandResultUnknownError(
-                "LINK 承运人重试结果未知，需要重新检查"
-            )
+            raise LinkCommandResultUnknownError("LINK 承运人重试结果未知，需要重新检查")
         if not response.is_success:
             raise LinkBookingProtocolError("LINK 重试接口返回非预期状态")
 
@@ -183,6 +278,40 @@ class HttpLinkBookingClient:
         if booking_reference is not None and not isinstance(booking_reference, str):
             raise LinkBookingProtocolError("LINK booking_reference 类型无效")
 
+        # 这些字段即使业务值允许为 null（requested_etd、booking_details），JSON 键也
+        # 必须存在。否则无法区分“LINK 明确返回暂无值”和“双方接口协议已经漂移”。
+        rpa_field_names = (
+            "origin_port",
+            "destination_port",
+            "transport_mode",
+            "container_type",
+            "requested_etd",
+            "booking_details",
+        )
+        missing_rpa_fields = [
+            field_name for field_name in rpa_field_names if field_name not in application
+        ]
+        if missing_rpa_fields:
+            raise LinkBookingProtocolError(
+                "LINK 详情缺少 RPA 字段：" + "、".join(missing_rpa_fields)
+            )
+
+        # model_validate_json 保留严格数字校验，同时允许 JSON 使用 ISO 字符串表达 date。
+        # 只挑选白名单字段，绝不把 LINK 的数据库 id、时间戳或未来新增字段直接下发给 RPA。
+        try:
+            rpa_payload = LinkRpaDraftPayload.model_validate_json(
+                json.dumps(
+                    {
+                        "application_number": application_number,
+                        **{field_name: application[field_name] for field_name in rpa_field_names},
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        except (TypeError, ValidationError) as error:
+            raise LinkBookingProtocolError("LINK RPA 草稿字段不符合 v1 协议") from error
+
         carrier = payload.get("carrier_submission")
         carrier_status: str | None = None
         carrier_can_retry = False
@@ -210,4 +339,5 @@ class HttpLinkBookingClient:
             carrier_status=carrier_status,
             carrier_can_retry=carrier_can_retry,
             carrier_request_id=carrier_request_id,
+            rpa_payload=rpa_payload,
         )

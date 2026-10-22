@@ -1,0 +1,10 @@
+# 本文件用于“一次安装本地学习环境的全部 Python 依赖”。
+#
+# 三个服务仍然保持独立 pyproject.toml；这里仅把它们聚合成一个开发机安装入口。
+# -e 表示 editable install：修改源码后无需重新安装。
+# [dev] 安装 pytest / ruff 等学习和测试工具。
+# [rpa] 安装 Playwright；浏览器内核由 setup 脚本单独安装。
+
+-e ./services/link-booking-service[dev]
+-e ./services/load-planning-service[dev,rpa]
+-e ./services/link-carrier-simulator[dev]

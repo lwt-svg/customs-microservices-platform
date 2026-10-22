@@ -56,7 +56,7 @@ let autoRefreshTimer: number | undefined
 const statusLabels: Record<ShipmentAgentRunStatus, string> = {
   RUNNING: '自动处理中',
   WAITING_HUMAN: '等待业务处理',
-  WAITING_RESOURCE: '等待专业作业',
+  WAITING_RESOURCE: '等待专业作业或自动填单',
   WAITING_EXTERNAL: '等待外部回复',
   COMPLETED: '已完成',
   FAILED: '失败',
@@ -76,6 +76,9 @@ const stageLabels: Record<ShipmentAgentStage, string> = {
   AWAITING_LOAD_REVIEW: '复核装载方案',
   AWAITING_LOAD_RELEASE: '发布正式装载版本',
   AWAITING_LOAD_REPLAN: '重新规划装载方案',
+  DISPATCHING_RPA_JOB: '派发自动填单任务',
+  AWAITING_RPA_RESULT: '等待自动填单结果',
+  AWAITING_RPA_ATTENTION: '自动填单待人工核对',
   AWAITING_BOOKING_SUBMIT_APPROVAL: '审批 LINK 提交',
   SUBMITTING_BOOKING: '提交 LINK 申请',
   AWAITING_BOOKING_RESULT: '等待承运人结果',
@@ -171,7 +174,7 @@ const filterOptions = computed<RunFilterOption[]>(() => {
     {
       key: 'WAITING_RESOURCE',
       label: '待专业作业',
-      description: '等待装载或订舱处理',
+      description: '等待装载或自动填单处理',
       icon: 'box',
       tone: 'resource',
       count: count('WAITING_RESOURCE'),
@@ -179,7 +182,7 @@ const filterOptions = computed<RunFilterOption[]>(() => {
     {
       key: 'WAITING_EXTERNAL',
       label: '等待外部',
-      description: '等待承运人回复',
+      description: '等待自动化或承运人回复',
       icon: 'clock',
       tone: 'external',
       count: count('WAITING_EXTERNAL'),

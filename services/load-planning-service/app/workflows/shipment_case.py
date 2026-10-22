@@ -138,6 +138,18 @@ class _ShipmentWorkflowNodes:
     ) -> dict[str, object]:
         return _run_update(await self.service.coordinate_load(state["run_id"]))
 
+    async def dispatch_rpa_job(
+        self,
+        state: ShipmentWorkflowState,
+    ) -> dict[str, object]:
+        return _run_update(await self.service.dispatch_link_rpa_job(state["run_id"]))
+
+    async def coordinate_rpa_job(
+        self,
+        state: ShipmentWorkflowState,
+    ) -> dict[str, object]:
+        return _run_update(await self.service.coordinate_rpa_job(state["run_id"]))
+
     async def coordinate_booking(
         self,
         state: ShipmentWorkflowState,
@@ -189,6 +201,8 @@ def _route(state: ShipmentWorkflowState) -> str:
         ShipmentAgentStage.SYNCING_CASE: "evaluate",
         ShipmentAgentStage.ASSESSING_DATA_READINESS: "data_readiness",
         ShipmentAgentStage.STARTING_LOAD_AGENT: "load",
+        ShipmentAgentStage.DISPATCHING_RPA_JOB: "dispatch_rpa",
+        ShipmentAgentStage.AWAITING_RPA_RESULT: "rpa",
         ShipmentAgentStage.AWAITING_BOOKING_RESULT: "booking",
         ShipmentAgentStage.AWAITING_CASE_ACTIVATION: "activate",
         ShipmentAgentStage.SUBMITTING_BOOKING: "submit",
@@ -216,6 +230,8 @@ def build_shipment_workflow(
     builder.add_node("evaluate", nodes.evaluate)
     builder.add_node("assess_data_readiness", nodes.assess_data_readiness)
     builder.add_node("coordinate_load", nodes.coordinate_load)
+    builder.add_node("dispatch_rpa_job", nodes.dispatch_rpa_job)
+    builder.add_node("coordinate_rpa_job", nodes.coordinate_rpa_job)
     builder.add_node("coordinate_booking", nodes.coordinate_booking)
     builder.add_node("activate_case", nodes.activate_case)
     builder.add_node("submit_booking", nodes.submit_booking)
@@ -231,6 +247,8 @@ def build_shipment_workflow(
             "evaluate": "evaluate",
             "data_readiness": "assess_data_readiness",
             "load": "coordinate_load",
+            "dispatch_rpa": "dispatch_rpa_job",
+            "rpa": "coordinate_rpa_job",
             "booking": "coordinate_booking",
             "activate": "activate_case",
             "submit": "submit_booking",
@@ -245,6 +263,8 @@ def build_shipment_workflow(
         "evaluate",
         "assess_data_readiness",
         "coordinate_load",
+        "dispatch_rpa_job",
+        "coordinate_rpa_job",
         "coordinate_booking",
         "activate_case",
         "submit_booking",
@@ -254,7 +274,7 @@ def build_shipment_workflow(
         builder.add_edge(node_name, "sync_run")
     return builder.compile(
         checkpointer=checkpointer,
-        name="shipment-coordinator-workflow-v2",
+        name="shipment-coordinator-workflow-v3",
     )
 
 
@@ -367,6 +387,18 @@ class ShipmentWorkflowOrchestrator:
             return await self.service.get(run_id)
 
         if (
+            current.status is ShipmentAgentRunStatus.WAITING_EXTERNAL
+            and current.current_stage is ShipmentAgentStage.AWAITING_RPA_RESULT
+        ):
+            changed = await self.service.coordinate_rpa_job(run_id)
+        elif (
+            current.status is ShipmentAgentRunStatus.WAITING_RESOURCE
+            and current.current_stage is ShipmentAgentStage.AWAITING_RPA_ATTENTION
+        ):
+            # 该阶段不做周期性盲重试；只有 RPA Job 对账/重排事务写入精确唤醒标记后，
+            # Worker 才会到这里重新读取一次权威状态。
+            changed = await self.service.coordinate_rpa_job(run_id)
+        elif (
             current.status is ShipmentAgentRunStatus.WAITING_EXTERNAL
             and current.current_stage is ShipmentAgentStage.AWAITING_BOOKING_RESULT
         ):

@@ -13,6 +13,7 @@ import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentChildResponse;
 import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentEventResponse;
 import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentInterruptType;
 import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentPendingInterruptResponse;
+import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentRpaJobResponse;
 import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentRunController;
 import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentRunResponse;
 import com.customsaffairs.platform.shipmentcaseagent.ShipmentAgentRunService;
@@ -113,6 +114,16 @@ class ShipmentAgentRunControllerTest {
                         .value("RECHECK"))
                 .andExpect(jsonPath("$.data.childAgent.nextAction")
                         .value("OPEN_LOAD_WORKBENCH"))
+                .andExpect(jsonPath("$.data.rpaJobs[0].jobId")
+                        .value("RPA-JOB-0001"))
+                .andExpect(jsonPath("$.data.rpaJobs[0].operation")
+                        .value("LINK_BOOKING_STAGE"))
+                .andExpect(jsonPath("$.data.rpaJobs[0].environment")
+                        .value("SANDBOX"))
+                .andExpect(jsonPath("$.data.rpaJobs[0].sideEffectPhase")
+                        .value("EXTERNAL_EFFECT_CONFIRMED"))
+                .andExpect(jsonPath("$.data.rpaJobs[0].businessOutcome")
+                        .value("LINK_DRAFT_SAVED"))
                 .andExpect(jsonPath("$.data.events[0].eventType")
                         .value("HUMAN_APPROVAL_REQUIRED"))
                 .andExpect(jsonPath("$.data.events[0].data.tool")
@@ -475,6 +486,19 @@ class ShipmentAgentRunControllerTest {
                             "WAITING_DECISION",
                             2,
                             "OPEN_LOAD_WORKBENCH"),
+                    List.of(new ShipmentAgentRpaJobResponse(
+                            "RPA-JOB-0001",
+                            1,
+                            "LINK",
+                            "LINK_BOOKING_STAGE",
+                            "SANDBOX",
+                            "SUCCEEDED",
+                            "草稿已保存并完成对账",
+                            "EXTERNAL_EFFECT_CONFIRMED",
+                            "LINK_DRAFT_SAVED",
+                            "LINK-DEMO-0001",
+                            null,
+                            "2026-10-16T02:09:00Z")),
                     "2026-10-16T02:00:00Z",
                     "2026-10-16T02:10:00Z",
                     null,

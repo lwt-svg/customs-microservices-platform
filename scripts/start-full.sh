@@ -58,6 +58,7 @@ start_carrier_simulator
 start_link_service
 record_link_mode full
 start_load_planning_service
+start_link_rpa_worker
 start_java_bff
 verify_core_bff_chains
 start_platform_web

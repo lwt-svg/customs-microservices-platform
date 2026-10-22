@@ -31,8 +31,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.models.rpa_job import RpaJobRecord
 from app.models.shipment_case import ShipmentCase
 from app.models.shipment_data_readiness import ShipmentDataReadinessStatus
+from app.rpa.contracts import RpaOperation
 
 
 class ShipmentAgentCapability(StrEnum):
@@ -58,6 +60,9 @@ class ShipmentAgentRunStatus(StrEnum):
 # 业务事务已经提交后，正常请求会立刻调用通知/唤醒投影并覆盖或清除它；若进程恰好在
 # 两者之间崩溃，后台 Worker 才会在宽限期后领取该运行，仅修复控制面投影。
 SHIPMENT_AGENT_REPAIR_PROJECTION_WAKE_REASON = "REPAIR_CONTROL_PROJECTION"
+# RPA Job 与 Shipment Run 分属两张业务表。Worker 回调只更新 Job，不直接恢复
+# LangGraph；它会把所有绑定运行标记为立即可唤醒，再由现有 Wake Worker 读取最新事实。
+SHIPMENT_AGENT_RPA_JOB_STATE_CHANGED_WAKE_REASON = "RPA_JOB_STATE_CHANGED"
 
 
 class ShipmentAgentStage(StrEnum):
@@ -85,6 +90,9 @@ class ShipmentAgentStage(StrEnum):
     AWAITING_BOOKING_RESULT = "AWAITING_BOOKING_RESULT"
     AWAITING_BOOKING_RETRY_APPROVAL = "AWAITING_BOOKING_RETRY_APPROVAL"
     AWAITING_BOOKING_REPLACEMENT = "AWAITING_BOOKING_REPLACEMENT"
+    DISPATCHING_RPA_JOB = "DISPATCHING_RPA_JOB"
+    AWAITING_RPA_RESULT = "AWAITING_RPA_RESULT"
+    AWAITING_RPA_ATTENTION = "AWAITING_RPA_ATTENTION"
     AWAITING_COMPLETION_APPROVAL = "AWAITING_COMPLETION_APPROVAL"
     COMPLETING_CASE = "COMPLETING_CASE"
     COMPLETED = "COMPLETED"
@@ -352,6 +360,73 @@ class ShipmentAgentRun(Base):
         lazy="selectin",
         order_by="ShipmentAgentNotification.created_at",
     )
+    rpa_job_bindings: Mapped[list["ShipmentAgentRpaJobBinding"]] = relationship(
+        back_populates="run",
+        # 绑定属于某次 Shipment Run 的编排事实；删除测试运行时可以随运行一起清理，
+        # 但 RPA Job 自身仍由统一控制面独立保存。
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ShipmentAgentRpaJobBinding.sequence",
+    )
+
+
+class ShipmentAgentRpaJobBinding(Base):
+    """Shipment Agent 运行与可复用 RPA Job 之间的有序绑定。
+
+    ``originating_run_id`` 只能说明 Job 最初由谁创建，不能表达后续运行复用了同一个
+    幂等 Job。专门的绑定表同时保存运行内顺序和业务操作，让 LangGraph 恢复时无需
+    依赖事件文案，也不会因为 Job 被复用而丢失当前运行的上下文。
+    """
+
+    __tablename__ = "shipment_agent_rpa_job_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "sequence > 0",
+            name="ck_shipment_agent_rpa_bindings_sequence_positive",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "sequence",
+            name="uq_shipment_agent_rpa_bindings_run_sequence",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "job_id",
+            name="uq_shipment_agent_rpa_bindings_run_job",
+        ),
+        Index("ix_shipment_agent_rpa_job_bindings_job_id", "job_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("shipment_agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("rpa_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[RpaOperation] = mapped_column(
+        Enum(
+            RpaOperation,
+            name="rpa_operation",
+            native_enum=False,
+            length=40,
+        ),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    run: Mapped[ShipmentAgentRun] = relationship(
+        back_populates="rpa_job_bindings",
+    )
+    # Job 是控制面的权威快照；绑定只引用它，不复制状态、结果或浏览器证据。
+    job: Mapped[RpaJobRecord] = relationship(lazy="selectin")
 
 
 class ShipmentAgentNotification(Base):
